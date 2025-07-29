@@ -61,7 +61,7 @@ func (c *Client) doRequest(ctx context.Context, method, url string, body interfa
 // parseResponse reads and unmarshals the response
 func parseResponse(resp *http.Response, target interface{}) error {
 	defer resp.Body.Close()
-	
+
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
@@ -93,17 +93,29 @@ func (c *Client) GetSnapshot(ctx context.Context, symbol string) (*models.Snapsh
 		return nil, err
 	}
 
-	var result struct {
-		Symbol       string         `json:"symbol"`
-		LatestTrade  *models.Trade  `json:"latestTrade"`
-		LatestQuote  *models.Quote  `json:"latestQuote"`
-		MinuteBar    *models.Bar    `json:"minuteBar"`
-		DailyBar     *models.Bar    `json:"dailyBar"`
-		PrevDailyBar *models.Bar    `json:"prevDailyBar"`
+	// First, let's capture the raw response for debugging
+	defer resp.Body.Close()
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", readErr)
 	}
-	
-	if err := parseResponse(resp, &result); err != nil {
-		return nil, err
+
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+	}
+
+	// The correct JSON structure for Alpaca API v2 snapshot
+	var result struct {
+		Symbol       string        `json:"symbol"`
+		LatestTrade  *models.Trade `json:"latestTrade"`
+		LatestQuote  *models.Quote `json:"latestQuote"`
+		MinuteBar    *models.Bar   `json:"minuteBar"`
+		DailyBar     *models.Bar   `json:"dailyBar"`
+		PrevDailyBar *models.Bar   `json:"prevDailyBar"`
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
 	return &models.Snapshot{
@@ -272,4 +284,4 @@ func (c *Client) GetOptionChain(ctx context.Context, underlying string, expiry t
 func DecimalPtr(v float64) *decimal.Decimal {
 	d := decimal.NewFromFloat(v)
 	return &d
-} 
+}
