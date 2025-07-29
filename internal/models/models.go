@@ -55,48 +55,48 @@ const (
 
 // Order represents a trading order
 type Order struct {
-	ID              string          `json:"id"`
-	ClientOrderID   string          `json:"client_order_id"`
-	CreatedAt       time.Time       `json:"created_at"`
-	UpdatedAt       time.Time       `json:"updated_at"`
-	SubmittedAt     time.Time       `json:"submitted_at"`
-	FilledAt        *time.Time      `json:"filled_at"`
-	ExpiredAt       *time.Time      `json:"expired_at"`
-	CanceledAt      *time.Time      `json:"canceled_at"`
-	FailedAt        *time.Time      `json:"failed_at"`
-	ReplacedAt      *time.Time      `json:"replaced_at"`
-	ReplacedBy      *string         `json:"replaced_by"`
-	Replaces        *string         `json:"replaces"`
-	AssetID         string          `json:"asset_id"`
-	Symbol          string          `json:"symbol"`
-	AssetClass      string          `json:"asset_class"`
-	Notional        *decimal.Decimal `json:"notional"`
-	Qty             decimal.Decimal `json:"qty"`
-	FilledQty       decimal.Decimal `json:"filled_qty"`
-	FilledAvgPrice  *decimal.Decimal `json:"filled_avg_price"`
-	OrderClass      string          `json:"order_class"`
-	OrderType       OrderType       `json:"order_type"`
-	Type            OrderType       `json:"type"`
-	Side            OrderSide       `json:"side"`
-	TimeInForce     TimeInForce     `json:"time_in_force"`
-	LimitPrice      *decimal.Decimal `json:"limit_price"`
-	StopPrice       *decimal.Decimal `json:"stop_price"`
-	Status          OrderStatus     `json:"status"`
-	ExtendedHours   bool            `json:"extended_hours"`
+	ID             string           `json:"id"`
+	ClientOrderID  string           `json:"client_order_id"`
+	CreatedAt      time.Time        `json:"created_at"`
+	UpdatedAt      time.Time        `json:"updated_at"`
+	SubmittedAt    time.Time        `json:"submitted_at"`
+	FilledAt       *time.Time       `json:"filled_at"`
+	ExpiredAt      *time.Time       `json:"expired_at"`
+	CanceledAt     *time.Time       `json:"canceled_at"`
+	FailedAt       *time.Time       `json:"failed_at"`
+	ReplacedAt     *time.Time       `json:"replaced_at"`
+	ReplacedBy     *string          `json:"replaced_by"`
+	Replaces       *string          `json:"replaces"`
+	AssetID        string           `json:"asset_id"`
+	Symbol         string           `json:"symbol"`
+	AssetClass     string           `json:"asset_class"`
+	Notional       *decimal.Decimal `json:"notional"`
+	Qty            decimal.Decimal  `json:"qty"`
+	FilledQty      decimal.Decimal  `json:"filled_qty"`
+	FilledAvgPrice *decimal.Decimal `json:"filled_avg_price"`
+	OrderClass     string           `json:"order_class"`
+	OrderType      OrderType        `json:"order_type"`
+	Type           OrderType        `json:"type"`
+	Side           OrderSide        `json:"side"`
+	TimeInForce    TimeInForce      `json:"time_in_force"`
+	LimitPrice     *decimal.Decimal `json:"limit_price"`
+	StopPrice      *decimal.Decimal `json:"stop_price"`
+	Status         OrderStatus      `json:"status"`
+	ExtendedHours  bool             `json:"extended_hours"`
 }
 
 // OrderRequest represents a request to create a new order
 type OrderRequest struct {
-	Symbol          string           `json:"symbol"`
-	Qty             *decimal.Decimal `json:"qty,omitempty"`
-	Notional        *decimal.Decimal `json:"notional,omitempty"`
-	Side            OrderSide        `json:"side"`
-	Type            OrderType        `json:"type"`
-	TimeInForce     TimeInForce      `json:"time_in_force"`
-	LimitPrice      *decimal.Decimal `json:"limit_price,omitempty"`
-	StopPrice       *decimal.Decimal `json:"stop_price,omitempty"`
-	ExtendedHours   bool             `json:"extended_hours,omitempty"`
-	ClientOrderID   string           `json:"client_order_id,omitempty"`
+	Symbol        string           `json:"symbol"`
+	Qty           *decimal.Decimal `json:"qty,omitempty"`
+	Notional      *decimal.Decimal `json:"notional,omitempty"`
+	Side          OrderSide        `json:"side"`
+	Type          OrderType        `json:"type"`
+	TimeInForce   TimeInForce      `json:"time_in_force"`
+	LimitPrice    *decimal.Decimal `json:"limit_price,omitempty"`
+	StopPrice     *decimal.Decimal `json:"stop_price,omitempty"`
+	ExtendedHours bool             `json:"extended_hours,omitempty"`
+	ClientOrderID string           `json:"client_order_id,omitempty"`
 }
 
 // Position represents a current position
@@ -154,48 +154,48 @@ type Account struct {
 
 // Quote represents a market quote
 type Quote struct {
-	Symbol        string          `json:"symbol"`
-	BidPrice      decimal.Decimal `json:"bid_price"`
-	BidSize       int32           `json:"bid_size"`
-	AskPrice      decimal.Decimal `json:"ask_price"`
-	AskSize       int32           `json:"ask_size"`
-	Timestamp     time.Time       `json:"timestamp"`
-	Conditions    []string        `json:"conditions"`
-	Tape          string          `json:"tape"`
+	Symbol     string          `json:"symbol"`
+	BidPrice   decimal.Decimal `json:"bp"`
+	BidSize    int32           `json:"bs"`
+	AskPrice   decimal.Decimal `json:"ap"`
+	AskSize    int32           `json:"as"`
+	Timestamp  time.Time       `json:"t"`
+	Conditions []string        `json:"c"`
+	Tape       string          `json:"z"`
 }
 
 // Trade represents a market trade
 type Trade struct {
 	Symbol     string          `json:"symbol"`
-	Price      decimal.Decimal `json:"price"`
-	Size       int32           `json:"size"`
-	Timestamp  time.Time       `json:"timestamp"`
-	Conditions []string        `json:"conditions"`
-	ID         int64           `json:"id"`
-	Tape       string          `json:"tape"`
+	Price      decimal.Decimal `json:"p"`
+	Size       int32           `json:"s"`
+	Timestamp  time.Time       `json:"t"`
+	Conditions []string        `json:"c"`
+	ID         int64           `json:"i"`
+	Tape       string          `json:"z"`
 }
 
 // Bar represents an OHLCV bar
 type Bar struct {
 	Symbol     string          `json:"symbol"`
-	Open       decimal.Decimal `json:"open"`
-	High       decimal.Decimal `json:"high"`
-	Low        decimal.Decimal `json:"low"`
-	Close      decimal.Decimal `json:"close"`
-	Volume     int64           `json:"volume"`
-	Timestamp  time.Time       `json:"timestamp"`
-	TradeCount int64           `json:"trade_count"`
-	VWAP       decimal.Decimal `json:"vwap"`
+	Open       decimal.Decimal `json:"o"`
+	High       decimal.Decimal `json:"h"`
+	Low        decimal.Decimal `json:"l"`
+	Close      decimal.Decimal `json:"c"`
+	Volume     int64           `json:"v"`
+	Timestamp  time.Time       `json:"t"`
+	TradeCount int64           `json:"n"`
+	VWAP       decimal.Decimal `json:"vw"`
 }
 
 // Snapshot represents a market snapshot
 type Snapshot struct {
-	Symbol       string  `json:"symbol"`
-	LatestTrade  *Trade  `json:"latestTrade"`
-	LatestQuote  *Quote  `json:"latestQuote"`
-	MinuteBar    *Bar    `json:"minuteBar"`
-	DailyBar     *Bar    `json:"dailyBar"`
-	PrevDailyBar *Bar    `json:"prevDailyBar"`
+	Symbol       string `json:"symbol"`
+	LatestTrade  *Trade `json:"latestTrade"`
+	LatestQuote  *Quote `json:"latestQuote"`
+	MinuteBar    *Bar   `json:"minuteBar"`
+	DailyBar     *Bar   `json:"dailyBar"`
+	PrevDailyBar *Bar   `json:"prevDailyBar"`
 }
 
 // OptionContract represents an options contract
@@ -213,4 +213,4 @@ type OptionContract struct {
 	Theta        decimal.Decimal `json:"theta"`
 	Vega         decimal.Decimal `json:"vega"`
 	Rho          decimal.Decimal `json:"rho"`
-} 
+}
