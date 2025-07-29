@@ -109,7 +109,6 @@ func runStream(cmd *cobra.Command, args []string) error {
 		case <-authTicker.C:
 			if streamClient.IsConnected() {
 				authenticated = true
-				break
 			}
 		}
 	}

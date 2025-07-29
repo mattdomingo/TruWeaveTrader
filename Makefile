@@ -13,6 +13,7 @@ GOGET=$(GOCMD) get
 GOMOD=$(GOCMD) mod
 GOFMT=gofmt
 GOLINT=golangci-lint
+GOPATH=$(shell go env GOPATH)
 
 # Build flags
 LDFLAGS=-ldflags "-s -w"
@@ -105,16 +106,59 @@ positions:
 orders:
 	$(BINARY_PATH) orders
 
-# Help
+
+
+# CI workflow - replicates GitHub Actions
+ci: deps-ci test-ci vet staticcheck build-test build-cross-platform
+
+# Install dependencies and verify (CI style)
+deps-ci:
+	@echo "📦 Downloading dependencies..."
+	$(GOMOD) download
+	@echo "✅ Verifying dependencies..."
+	$(GOMOD) verify
+
+# Run tests with coverage (CI style)
+test-ci: deps-ci
+	@echo "�� Running tests with race detection and coverage..."
+	$(GOTEST) -v -race -coverprofile=coverage.out ./...
+
+# Run go vet
+vet:
+	@echo "🔍 Running go vet..."
+	$(GOCMD) vet ./...
+
+# Run staticcheck
+staticcheck:
+	@echo "🔍 Running staticcheck..."
+	@if ! command -v staticcheck &> /dev/null; then \
+		echo "Installing staticcheck..."; \
+		$(GOCMD) install honnef.co/go/tools/cmd/staticcheck@latest; \
+	fi
+	$(GOPATH)/bin/staticcheck ./...
+
+# Build test
+build-test: build
+	@echo "�� Testing build..."
+	$(BINARY_PATH) --help
+
+# Cross-platform build test
+build-cross-platform: build-linux build-darwin build-windows
+	@echo "✅ Cross-platform builds completed"
+
 help:
 	@echo "Available targets:"
 	@echo "  make build       - Build the binary"
 	@echo "  make run         - Build and run the application"
 	@echo "  make test        - Run tests"
+	@echo "  make test-ci     - Run tests with coverage (CI style)"
+	@echo "  make ci          - Run full CI workflow locally"
 	@echo "  make clean       - Clean build artifacts"
 	@echo "  make install     - Install the binary to GOPATH/bin"
 	@echo "  make deps        - Install/update dependencies"
 	@echo "  make fmt         - Format code"
 	@echo "  make lint        - Run linter"
+	@echo "  make vet         - Run go vet"
+	@echo "  make staticcheck - Run staticcheck"
 	@echo "  make build-all   - Build for all platforms"
-	@echo "  make watch       - Auto-rebuild on changes (requires entr)" 
+	@echo "  make watch       - Auto-rebuild on changes (requires entr)"

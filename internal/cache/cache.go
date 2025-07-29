@@ -1,7 +1,6 @@
 package cache
 
 import (
-	"sync"
 	"time"
 
 	"github.com/TruWeaveTrader/alpaca-tui/internal/models"
@@ -13,7 +12,6 @@ type Cache struct {
 	snapshots *gocache.Cache
 	quotes    *gocache.Cache
 	bars      *gocache.Cache
-	mu        sync.RWMutex
 	ttl       time.Duration
 }
 
@@ -61,7 +59,7 @@ func (c *Cache) SetQuote(symbol string, quote *models.Quote) {
 // UpdateQuoteFromStream updates a quote from streaming data
 func (c *Cache) UpdateQuoteFromStream(quote *models.Quote) {
 	c.quotes.Set(quote.Symbol, quote, c.ttl)
-	
+
 	// Also update the snapshot if it exists
 	if snapshot, found := c.GetSnapshot(quote.Symbol); found {
 		snapshot.LatestQuote = quote
@@ -114,4 +112,4 @@ func (c *Cache) GetStats() Stats {
 		QuoteCount:    c.quotes.ItemCount(),
 		BarCount:      c.bars.ItemCount(),
 	}
-} 
+}
