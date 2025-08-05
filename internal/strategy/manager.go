@@ -504,6 +504,44 @@ func (m *Manager) updateSymbolStream() {
 	}
 
 	m.logger.Info("updated symbol stream", zap.Strings("symbols", symbols))
-	// Note: You would update your websocket streaming here
-	// m.stream.UpdateSubscriptions(symbols)
+
+	// Connect to websocket and subscribe to symbols
+	if m.stream != nil && len(symbols) > 0 {
+		// Connect to websocket if not already connected
+		if !m.stream.IsConnected() {
+			if err := m.stream.Connect(); err != nil {
+				m.logger.Error("failed to connect to websocket", zap.Error(err))
+				return
+			}
+		}
+
+		// Subscribe to symbols
+		if err := m.stream.Subscribe(symbols); err != nil {
+			m.logger.Error("failed to subscribe to symbols", zap.Error(err))
+			return
+		}
+
+		// Register handlers for market data
+		m.stream.RegisterHandler("trade", func(msg interface{}) {
+			if trade, ok := msg.(*models.Trade); ok {
+				// Process trade data
+				m.logger.Debug("received trade", zap.String("symbol", trade.Symbol), zap.String("price", trade.Price.String()))
+			}
+		})
+
+		m.stream.RegisterHandler("quote", func(msg interface{}) {
+			if quote, ok := msg.(*models.Quote); ok {
+				// Process quote data
+				m.logger.Debug("received quote", zap.String("symbol", quote.Symbol), zap.String("bid", quote.BidPrice.String()), zap.String("ask", quote.AskPrice.String()))
+			}
+		})
+
+		m.stream.RegisterHandler("bar", func(msg interface{}) {
+			if bar, ok := msg.(*models.Bar); ok {
+				// Process bar data
+				m.logger.Debug("received bar", zap.String("symbol", bar.Symbol), zap.String("close", bar.Close.String()))
+				m.OnBar(bar.Symbol, bar)
+			}
+		})
+	}
 }

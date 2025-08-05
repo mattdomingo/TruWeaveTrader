@@ -207,9 +207,14 @@ All positions are continuously monitored for:
 ### Common Issues
 
 1. **"Strategies disabled"** - Set `STRATEGIES_ENABLED=true` in your `.env` file
-2. **"No historical data"** - Ensure your Alpaca API keys have market data access
+2. **"No historical data" / 403 API errors** - Your Alpaca account may not have access to recent SIP data:
+   - **Basic accounts**: Limited to 15-minute delayed data
+   - **Solution 1**: Upgrade to Alpaca Pro for real-time data access
+   - **Solution 2**: Strategies will still work with live data once market opens
+   - **Solution 3**: Use paper trading mode which may have different data access
 3. **"Risk check failed"** - Check position sizes and daily loss limits
 4. **"Spread too wide"** - Strategy skipped trade due to poor liquidity
+5. **"0 symbols" in strategy list** - Configuration loading issue, strategies should still work with defined symbols
 
 ### Logs
 
