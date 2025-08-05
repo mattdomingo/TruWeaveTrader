@@ -167,7 +167,7 @@ func (s *MomentumStrategy) Initialize(ctx context.Context, client *alpaca.Client
 	// Load historical data for each symbol
 	for _, symbol := range s.symbols {
 		if err := s.loadHistoricalData(ctx, symbol); err != nil {
-			s.logger.Error("failed to load historical data",
+			s.logger.Warn("failed to load historical data, strategy will initialize as data becomes available",
 				zap.String("symbol", symbol),
 				zap.Error(err))
 		}

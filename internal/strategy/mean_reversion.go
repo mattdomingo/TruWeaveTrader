@@ -114,10 +114,10 @@ func (s *MeanReversionStrategy) Initialize(ctx context.Context, client *alpaca.C
 	// Load historical data for each symbol
 	for _, symbol := range s.symbols {
 		if err := s.loadHistoricalData(ctx, symbol); err != nil {
-			s.logger.Error("failed to load historical data",
+			s.logger.Warn("failed to load historical data, strategy will initialize as data becomes available",
 				zap.String("symbol", symbol),
 				zap.Error(err))
-			// Continue with other symbols
+			// Continue with other symbols - strategy will work once live data starts flowing
 		}
 	}
 

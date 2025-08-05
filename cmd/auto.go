@@ -135,6 +135,22 @@ func runAutoStart(cmd *cobra.Command, args []string) error {
 					len(s.GetSymbols()))
 			}
 		}
+
+		// Keep the process running to receive market data
+		fmt.Println("\n🔄 Automation is now running continuously...")
+		fmt.Println("   Press Ctrl+C to stop")
+		fmt.Println("   Check positions with: ./alpaca-tui positions")
+		fmt.Println("   Check orders with: ./alpaca-tui orders")
+
+		// Wait for interrupt signal
+		select {
+		case <-cmd.Context().Done():
+			fmt.Println("\n🛑 Stopping automation...")
+			if err := strategyManager.StopAll(); err != nil {
+				return fmt.Errorf("failed to stop automation: %w", err)
+			}
+			fmt.Println("✅ Automation stopped successfully")
+		}
 	} else {
 		// Start specific strategy
 		strategyName := args[0]
@@ -143,6 +159,20 @@ func runAutoStart(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("failed to start strategy %s: %w", strategyName, err)
 		}
 		fmt.Printf("✅ Strategy %s started successfully\n", strategyName)
+
+		// Keep the process running for single strategy too
+		fmt.Println("\n🔄 Strategy is now running continuously...")
+		fmt.Println("   Press Ctrl+C to stop")
+
+		// Wait for interrupt signal
+		select {
+		case <-cmd.Context().Done():
+			fmt.Println("\n🛑 Stopping strategy...")
+			if err := strategyManager.StopStrategy(strategyName); err != nil {
+				return fmt.Errorf("failed to stop strategy %s: %w", strategyName, err)
+			}
+			fmt.Println("✅ Strategy stopped successfully")
+		}
 	}
 
 	return nil
