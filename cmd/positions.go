@@ -10,7 +10,7 @@ import (
 
 func init() {
 	rootCmd.AddCommand(positionsCmd)
-	rootCmd.AddCommand(posCmd)  // Alias
+	rootCmd.AddCommand(posCmd) // Alias
 }
 
 var posCmd = &cobra.Command{
@@ -28,20 +28,20 @@ var positionsCmd = &cobra.Command{
 
 func runPositions(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
-	
+
 	// Fetch positions
 	positions, err := client.GetPositions(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get positions: %w", err)
 	}
-	
+
 	if len(positions) == 0 {
 		fmt.Println("No open positions")
 		return nil
 	}
-	
+
 	// Display formatted positions table
 	fmt.Println(formatters.FormatPositionsTable(positions))
-	
+
 	return nil
-} 
+}

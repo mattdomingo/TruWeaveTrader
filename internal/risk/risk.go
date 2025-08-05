@@ -45,7 +45,7 @@ func (m *Manager) ValidateOrder(order *models.OrderRequest, account *models.Acco
 	if orderValue.GreaterThan(maxPosition) {
 		return CheckResult{
 			Passed: false,
-			Reason: fmt.Sprintf("Order value $%.2f exceeds max position size $%.2f", 
+			Reason: fmt.Sprintf("Order value $%.2f exceeds max position size $%.2f",
 				orderValue.InexactFloat64(), maxPosition.InexactFloat64()),
 		}
 	}
@@ -63,7 +63,7 @@ func (m *Manager) ValidateOrder(order *models.OrderRequest, account *models.Acco
 
 	// Check day trading buying power if applicable
 	if account.PatternDayTrader && orderValue.GreaterThan(account.DaytradingBuyingPower) {
-		result.Warnings = append(result.Warnings, 
+		result.Warnings = append(result.Warnings,
 			fmt.Sprintf("Order uses %.1f%% of day trading buying power",
 				orderValue.Div(account.DaytradingBuyingPower).Mul(decimal.NewFromInt(100)).InexactFloat64()))
 	}
@@ -82,7 +82,7 @@ func (m *Manager) ValidateOrder(order *models.OrderRequest, account *models.Acco
 func (m *Manager) ValidateOptionOrder(order *models.OrderRequest, account *models.Account, optionPrice decimal.Decimal) CheckResult {
 	// Options are traded in contracts of 100 shares
 	contractMultiplier := decimal.NewFromInt(100)
-	
+
 	// Calculate total premium
 	totalPremium := optionPrice.Mul(*order.Qty).Mul(contractMultiplier)
 
@@ -121,7 +121,7 @@ func (m *Manager) CheckSpread(quote *models.Quote) CheckResult {
 
 	spread := quote.AskPrice.Sub(quote.BidPrice)
 	midPrice := quote.BidPrice.Add(quote.AskPrice).Div(decimal.NewFromInt(2))
-	
+
 	if midPrice.IsZero() {
 		return CheckResult{
 			Passed: false,
@@ -155,17 +155,17 @@ func (m *Manager) CalculatePositionSize(account *models.Account, price decimal.D
 	// Simple position sizing: use configured max or 10% of buying power, whichever is less
 	maxPosition := decimal.NewFromFloat(m.cfg.RiskMaxPositionUSD)
 	tenPercentBuyingPower := account.BuyingPower.Mul(decimal.NewFromFloat(0.1))
-	
+
 	positionValue := decimal.Min(maxPosition, tenPercentBuyingPower)
-	
+
 	// Calculate number of shares
 	shares := positionValue.Div(price).Floor()
-	
+
 	// Ensure at least 1 share
 	if shares.LessThan(decimal.NewFromInt(1)) {
 		shares = decimal.NewFromInt(1)
 	}
-	
+
 	return shares
 }
 
@@ -214,4 +214,4 @@ func (m *Manager) calculateOrderValue(order *models.OrderRequest, currentPrice d
 	}
 
 	return decimal.Zero
-} 
+}

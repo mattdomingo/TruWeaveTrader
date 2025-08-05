@@ -10,7 +10,7 @@ import (
 
 func init() {
 	rootCmd.AddCommand(accountCmd)
-	rootCmd.AddCommand(acctCmd)  // Alias
+	rootCmd.AddCommand(acctCmd) // Alias
 }
 
 var acctCmd = &cobra.Command{
@@ -28,16 +28,16 @@ var accountCmd = &cobra.Command{
 
 func runAccount(cmd *cobra.Command, args []string) error {
 	ctx := context.Background()
-	
+
 	// Fetch account info
 	account, err := client.GetAccount(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to get account: %w", err)
 	}
-	
+
 	// Display formatted account
 	fmt.Println(formatters.FormatAccount(account))
-	
+
 	// Check daily loss limit
 	result := riskManager.CheckDailyLoss(account)
 	if !result.Passed {
@@ -47,6 +47,6 @@ func runAccount(cmd *cobra.Command, args []string) error {
 			fmt.Printf("\n⚠️  %s\n", warning)
 		}
 	}
-	
+
 	return nil
-} 
+}
