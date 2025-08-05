@@ -12,17 +12,19 @@ import (
 	"github.com/TruWeaveTrader/alpaca-tui/internal/cache"
 	"github.com/TruWeaveTrader/alpaca-tui/internal/config"
 	"github.com/TruWeaveTrader/alpaca-tui/internal/risk"
+	"github.com/TruWeaveTrader/alpaca-tui/internal/strategy"
 	"github.com/TruWeaveTrader/alpaca-tui/internal/websocket"
 )
 
 var (
 	// Global instances
-	cfg          *config.Config
-	client       *alpaca.Client
-	dataCache    *cache.Cache
-	riskManager  *risk.Manager
-	streamClient *websocket.StreamClient
-	logger       *zap.Logger
+	cfg             *config.Config
+	client          *alpaca.Client
+	dataCache       *cache.Cache
+	riskManager     *risk.Manager
+	streamClient    *websocket.StreamClient
+	strategyManager *strategy.Manager
+	logger          *zap.Logger
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -57,7 +59,7 @@ func initConfig() {
 	config := zap.NewDevelopmentConfig()
 	config.EncoderConfig.TimeKey = "time"
 	config.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
-	
+
 	// Create logger
 	var err error
 	logger, err = config.Build()
@@ -80,6 +82,7 @@ func initializeApp(cmd *cobra.Command, args []string) error {
 	dataCache = cache.NewCache(cfg.CacheTTL)
 	riskManager = risk.NewManager(cfg)
 	streamClient = websocket.NewStreamClient(cfg, dataCache, logger)
+	strategyManager = strategy.NewManager(client, riskManager, streamClient, dataCache, logger, cfg)
 
 	// Display trading mode
 	mode := "PAPER"
@@ -87,7 +90,7 @@ func initializeApp(cmd *cobra.Command, args []string) error {
 		mode = "LIVE"
 	}
 	fmt.Printf("🚀 Alpaca TUI - %s Trading Mode\n", mode)
-	
+
 	return nil
 }
 
@@ -96,13 +99,13 @@ func checkLiveMode() error {
 	if cfg.LiveTrading {
 		fmt.Println("⚠️  WARNING: You are in LIVE trading mode!")
 		fmt.Print("Type 'confirm-live' to proceed: ")
-		
+
 		var confirm string
 		fmt.Scanln(&confirm)
-		
+
 		if confirm != "confirm-live" {
 			return fmt.Errorf("live trading not confirmed")
 		}
 	}
 	return nil
-} 
+}
