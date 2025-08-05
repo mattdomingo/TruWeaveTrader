@@ -7,6 +7,7 @@ A high-performance terminal trading application for the Alpaca API, written in G
 - ⚡ **Lightning-fast quotes** - Sub-150ms quote fetching with intelligent caching
 - 📊 **Real-time streaming** - WebSocket streaming for live market data
 - 🎯 **One-command trading** - Quick buy/sell commands with comprehensive risk checks
+- 🤖 **Automated strategies** - Mean reversion, momentum, and pairs trading algorithms
 - 🛡️ **Risk management** - Built-in position sizing, spread checks, and loss limits
 - 📈 **Beautiful output** - Color-coded tables and formatted displays
 - 🔒 **Safe by default** - Paper trading mode with explicit live confirmation
@@ -149,6 +150,24 @@ alpaca-tui stream AAPL
 alpaca-tui stream AAPL MSFT TSLA GOOGL
 ```
 
+### Automated Trading
+```bash
+# Enable automation
+echo "STRATEGIES_ENABLED=true" >> .env
+
+# Start all strategies
+alpaca-tui auto start
+
+# Check automation status
+alpaca-tui auto status
+
+# View strategy performance
+alpaca-tui auto metrics
+
+# Stop automation
+alpaca-tui auto stop
+```
+
 ## Trading Modes
 
 ### Paper Trading (Default)
@@ -185,6 +204,10 @@ Built-in safety features:
 | `sell [symbol] [qty]` | - | Sell shares |
 | `cancel [order-id]` | - | Cancel an order |
 | `stream [symbols...]` | - | Stream live data |
+| `auto start` | - | Start automated trading |
+| `auto stop` | - | Stop automated trading |
+| `auto status` | - | Show automation status |
+| `auto metrics` | - | Show strategy performance |
 
 ### Order Type Flags
 
@@ -241,14 +264,26 @@ GOOS=darwin GOARCH=amd64 go build -o alpaca-tui-macos
 GOOS=windows GOARCH=amd64 go build -o alpaca-tui.exe
 ```
 
+## Automated Trading Strategies
+
+The system includes three built-in algorithmic trading strategies:
+
+1. **Mean Reversion** - Trades FIG, NEGG, NVDA, META when prices deviate from moving averages
+2. **Momentum** - Follows trends with stop losses on AAPL, MSFT, GOOGL, TSLA  
+3. **Pairs Trading** - Statistical arbitrage on NVDA/AMD and META/GOOGL pairs
+
+See [AUTOMATION.md](AUTOMATION.md) for detailed documentation.
+
 ## Future Enhancements
 
 - [ ] Options trading support
 - [ ] TUI interface with live panels
 - [ ] Chart integration
-- [ ] Strategy automation
+- [x] Strategy automation (✅ **Completed**)
 - [ ] Redis cache support
 - [ ] Multi-account support
+- [ ] Backtesting framework
+- [ ] Machine learning models
 
 ## License
 

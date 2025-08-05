@@ -30,6 +30,10 @@ type Config struct {
 	CacheTTL                time.Duration
 	WebsocketReconnectDelay time.Duration
 	HTTPTimeout             time.Duration
+
+	// Strategy Configuration
+	StrategiesEnabled bool                     `json:"strategies_enabled"`
+	StrategyConfigs   []map[string]interface{} `json:"strategy_configs"`
 }
 
 // Load loads configuration from environment variables
@@ -57,6 +61,10 @@ func Load() (*Config, error) {
 		CacheTTL:                getEnvDuration("CACHE_TTL_MS", 100) * time.Millisecond,
 		WebsocketReconnectDelay: getEnvDuration("WEBSOCKET_RECONNECT_DELAY_MS", 1000) * time.Millisecond,
 		HTTPTimeout:             getEnvDuration("HTTP_TIMEOUT_MS", 2000) * time.Millisecond,
+
+		// Strategy Configuration
+		StrategiesEnabled: getEnvBool("STRATEGIES_ENABLED", false),
+		StrategyConfigs:   loadStrategyConfigs(),
 	}
 
 	// Validate required fields
@@ -105,4 +113,83 @@ func getEnvDuration(key string, defaultValue int64) time.Duration {
 		}
 	}
 	return time.Duration(defaultValue)
+}
+
+// loadStrategyConfigs loads strategy configurations from environment or returns default configs
+func loadStrategyConfigs() []map[string]interface{} {
+	// Default strategy configurations
+	return []map[string]interface{}{
+		{
+			"name":    "mean_reversion_tech",
+			"type":    "mean_reversion",
+			"enabled": false,
+			"symbols": []string{"FIG", "NEGG", "NVDA", "META"},
+			"parameters": map[string]interface{}{
+				"lookback_period":   20,
+				"threshold_percent": 2.5,
+				"max_position_usd":  5000.0,
+				"cooldown_minutes":  30,
+			},
+			"schedule": map[string]interface{}{
+				"start_time": "09:30",
+				"end_time":   "16:00",
+				"days":       []int{1, 2, 3, 4, 5}, // Mon-Fri
+				"timezone":   "America/New_York",
+			},
+		},
+		{
+			"name":    "momentum_trending",
+			"type":    "momentum",
+			"enabled": false,
+			"symbols": []string{"AAPL", "MSFT", "GOOGL", "TSLA"},
+			"parameters": map[string]interface{}{
+				"short_period":        10,
+				"long_period":         30,
+				"rsi_period":          14,
+				"stop_loss_percent":   2.0,
+				"take_profit_percent": 4.0,
+				"min_momentum":        1.0,
+				"max_position_usd":    8000.0,
+				"cooldown_minutes":    15,
+			},
+			"schedule": map[string]interface{}{
+				"start_time": "09:30",
+				"end_time":   "16:00",
+				"days":       []int{1, 2, 3, 4, 5},
+				"timezone":   "America/New_York",
+			},
+		},
+		{
+			"name":    "pairs_tech_correlation",
+			"type":    "pairs_trading",
+			"enabled": false,
+			"symbols": []string{}, // Will be derived from pairs
+			"parameters": map[string]interface{}{
+				"lookback_period":     60,
+				"entry_threshold":     2.0,
+				"exit_threshold":      0.5,
+				"stop_loss_threshold": 3.0,
+				"max_position_usd":    10000.0,
+				"cooldown_minutes":    30,
+				"pairs": []map[string]interface{}{
+					{
+						"symbol1": "NVDA",
+						"symbol2": "AMD",
+						"ratio":   1.0,
+					},
+					{
+						"symbol1": "META",
+						"symbol2": "GOOGL",
+						"ratio":   1.0,
+					},
+				},
+			},
+			"schedule": map[string]interface{}{
+				"start_time": "09:30",
+				"end_time":   "16:00",
+				"days":       []int{1, 2, 3, 4, 5},
+				"timezone":   "America/New_York",
+			},
+		},
+	}
 }
