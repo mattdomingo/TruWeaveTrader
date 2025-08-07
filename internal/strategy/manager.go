@@ -524,21 +524,36 @@ func (m *Manager) updateSymbolStream() {
 		// Register handlers for market data
 		m.stream.RegisterHandler("trade", func(msg interface{}) {
 			if trade, ok := msg.(*models.Trade); ok {
-				// Process trade data
 				m.logger.Debug("received trade", zap.String("symbol", trade.Symbol), zap.String("price", trade.Price.String()))
+
+				// Build snapshot and forward to strategies
+				snapshot, _ := m.cache.GetSnapshot(trade.Symbol)
+				if snapshot == nil {
+					snapshot = &models.Snapshot{Symbol: trade.Symbol}
+				}
+				snapshot.LatestTrade = trade
+				m.cache.SetSnapshot(trade.Symbol, snapshot)
+				m.OnTick(trade.Symbol, snapshot)
 			}
 		})
 
 		m.stream.RegisterHandler("quote", func(msg interface{}) {
 			if quote, ok := msg.(*models.Quote); ok {
-				// Process quote data
 				m.logger.Debug("received quote", zap.String("symbol", quote.Symbol), zap.String("bid", quote.BidPrice.String()), zap.String("ask", quote.AskPrice.String()))
+
+				// Build snapshot and forward to strategies
+				snapshot, _ := m.cache.GetSnapshot(quote.Symbol)
+				if snapshot == nil {
+					snapshot = &models.Snapshot{Symbol: quote.Symbol}
+				}
+				snapshot.LatestQuote = quote
+				m.cache.SetSnapshot(quote.Symbol, snapshot)
+				m.OnTick(quote.Symbol, snapshot)
 			}
 		})
 
 		m.stream.RegisterHandler("bar", func(msg interface{}) {
 			if bar, ok := msg.(*models.Bar); ok {
-				// Process bar data
 				m.logger.Debug("received bar", zap.String("symbol", bar.Symbol), zap.String("close", bar.Close.String()))
 				m.OnBar(bar.Symbol, bar)
 			}
