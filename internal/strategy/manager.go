@@ -524,15 +524,33 @@ func (m *Manager) updateSymbolStream() {
 		// Register handlers for market data
 		m.stream.RegisterHandler("trade", func(msg interface{}) {
 			if trade, ok := msg.(*models.Trade); ok {
-				// Process trade data
+				// Update snapshot with latest trade and trigger strategies
 				m.logger.Debug("received trade", zap.String("symbol", trade.Symbol), zap.String("price", trade.Price.String()))
+
+				snapshot, _ := m.cache.GetSnapshot(trade.Symbol)
+				if snapshot == nil {
+					snapshot = &models.Snapshot{Symbol: trade.Symbol}
+				}
+				snapshot.LatestTrade = trade
+				m.cache.SetSnapshot(trade.Symbol, snapshot)
+
+				m.OnTick(trade.Symbol, snapshot)
 			}
 		})
 
 		m.stream.RegisterHandler("quote", func(msg interface{}) {
 			if quote, ok := msg.(*models.Quote); ok {
-				// Process quote data
+				// Update snapshot with latest quote and trigger strategies
 				m.logger.Debug("received quote", zap.String("symbol", quote.Symbol), zap.String("bid", quote.BidPrice.String()), zap.String("ask", quote.AskPrice.String()))
+
+				snapshot, _ := m.cache.GetSnapshot(quote.Symbol)
+				if snapshot == nil {
+					snapshot = &models.Snapshot{Symbol: quote.Symbol}
+				}
+				snapshot.LatestQuote = quote
+				m.cache.SetSnapshot(quote.Symbol, snapshot)
+
+				m.OnTick(quote.Symbol, snapshot)
 			}
 		})
 
