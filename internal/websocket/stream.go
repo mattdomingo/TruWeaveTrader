@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -49,24 +50,36 @@ type subscribeMessage struct {
 	Bars   []string `json:"bars,omitempty"`
 }
 
+// streamMessage is a generic container for all stream events.
+// Some fields are shared across different message types, while others
+// are only used in specific messages. Optional fields are marked with
+// `omitempty` so that unmarshalling succeeds regardless of the message
+// contents. The raw `C` field is used for both trade/quote conditions
+// (string array) and bar close prices (number).
 type streamMessage struct {
-	T  string          `json:"T"`  // message type
-	S  string          `json:"S"`  // symbol
-	X  string          `json:"x"`  // exchange
-	P  decimal.Decimal `json:"p"`  // price
-	S2 int32           `json:"s"`  // size
-	C  []string        `json:"c"`  // conditions
-	I  int64           `json:"i"`  // ID
-	Z  string          `json:"z"`  // tape
-	T2 time.Time       `json:"t"`  // timestamp
-	BP decimal.Decimal `json:"bp"` // bid price
-	BS int32           `json:"bs"` // bid size
-	AP decimal.Decimal `json:"ap"` // ask price
-	AS int32           `json:"as"` // ask size
+	T  string          `json:"T"`           // message type
+	S  string          `json:"S"`           // symbol
+	X  string          `json:"x,omitempty"` // exchange
+	P  decimal.Decimal `json:"p,omitempty"` // price
+	S2 int32           `json:"s,omitempty"` // size
+	C  json.RawMessage `json:"c,omitempty"`
+	I  int64           `json:"i,omitempty"`  // ID
+	Z  string          `json:"z,omitempty"`  // tape
+	T2 time.Time       `json:"t,omitempty"`  // timestamp
+	BP decimal.Decimal `json:"bp,omitempty"` // bid price
+	BS int32           `json:"bs,omitempty"` // bid size
+	AP decimal.Decimal `json:"ap,omitempty"` // ask price
+	AS int32           `json:"as,omitempty"` // ask size
+	O  decimal.Decimal `json:"o,omitempty"`  // open (bar)
+	H  decimal.Decimal `json:"h,omitempty"`  // high (bar)
+	L  decimal.Decimal `json:"l,omitempty"`  // low (bar)
+	V  int64           `json:"v,omitempty"`  // volume (bar)
+	N  int64           `json:"n,omitempty"`  // trade count (bar)
+	VW decimal.Decimal `json:"vw,omitempty"` // vwap (bar)
 
 	// Error message fields
-	Code int    `json:"code"` // error code
-	Msg  string `json:"msg"`  // error message
+	Code int    `json:"code,omitempty"` // error code
+	Msg  string `json:"msg,omitempty"`  // error message
 }
 
 // NewStreamClient creates a new streaming client
@@ -221,8 +234,7 @@ func (c *StreamClient) handleMessages() {
 			// Set read deadline
 			c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 
-			err := c.conn.ReadJSON(&msg)
-			if err != nil {
+			if err := c.conn.ReadJSON(&msg); err != nil {
 				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 					c.logger.Error("Websocket read error", zap.Error(err))
 				}
@@ -241,12 +253,16 @@ func (c *StreamClient) handleMessages() {
 func (c *StreamClient) processMessage(msg streamMessage) {
 	switch msg.T {
 	case "t": // Trade
+		var conditions []string
+		if len(msg.C) > 0 {
+			_ = json.Unmarshal(msg.C, &conditions)
+		}
 		trade := &models.Trade{
 			Symbol:     msg.S,
 			Price:      msg.P,
 			Size:       msg.S2,
 			Timestamp:  msg.T2,
-			Conditions: msg.C,
+			Conditions: conditions,
 			ID:         msg.I,
 			Tape:       msg.Z,
 		}
@@ -256,6 +272,10 @@ func (c *StreamClient) processMessage(msg streamMessage) {
 		}
 
 	case "q": // Quote
+		var conditions []string
+		if len(msg.C) > 0 {
+			_ = json.Unmarshal(msg.C, &conditions)
+		}
 		quote := &models.Quote{
 			Symbol:     msg.S,
 			BidPrice:   msg.BP,
@@ -263,7 +283,7 @@ func (c *StreamClient) processMessage(msg streamMessage) {
 			AskPrice:   msg.AP,
 			AskSize:    msg.AS,
 			Timestamp:  msg.T2,
-			Conditions: msg.C,
+			Conditions: conditions,
 			Tape:       msg.Z,
 		}
 		c.cache.UpdateQuoteFromStream(quote)
@@ -272,9 +292,23 @@ func (c *StreamClient) processMessage(msg streamMessage) {
 		}
 
 	case "b": // Bar
-		// Handle bar messages if needed
+		var closePrice decimal.Decimal
+		if len(msg.C) > 0 {
+			_ = json.Unmarshal(msg.C, &closePrice)
+		}
+		bar := &models.Bar{
+			Symbol:     msg.S,
+			Open:       msg.O,
+			High:       msg.H,
+			Low:        msg.L,
+			Close:      closePrice,
+			Volume:     msg.V,
+			Timestamp:  msg.T2,
+			TradeCount: msg.N,
+			VWAP:       msg.VW,
+		}
 		if handler, ok := c.handlers["bar"]; ok {
-			handler(msg)
+			handler(bar)
 		}
 
 	case "success":
