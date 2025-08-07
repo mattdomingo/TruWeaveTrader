@@ -524,15 +524,47 @@ func (m *Manager) updateSymbolStream() {
 		// Register handlers for market data
 		m.stream.RegisterHandler("trade", func(msg interface{}) {
 			if trade, ok := msg.(*models.Trade); ok {
+				// Update cache and build snapshot
+				var snapshot *models.Snapshot
+				if m.cache != nil {
+					m.cache.UpdateTradeFromStream(trade)
+					if cached, found := m.cache.GetSnapshot(trade.Symbol); found {
+						snapshot = cached
+					}
+				}
+				if snapshot == nil {
+					snapshot = &models.Snapshot{Symbol: trade.Symbol}
+				}
+				snapshot.LatestTrade = trade
+				if m.cache != nil {
+					m.cache.SetSnapshot(trade.Symbol, snapshot)
+				}
 				// Process trade data
 				m.logger.Debug("received trade", zap.String("symbol", trade.Symbol), zap.String("price", trade.Price.String()))
+				m.OnTick(trade.Symbol, snapshot)
 			}
 		})
 
 		m.stream.RegisterHandler("quote", func(msg interface{}) {
 			if quote, ok := msg.(*models.Quote); ok {
+				// Update cache and build snapshot
+				var snapshot *models.Snapshot
+				if m.cache != nil {
+					m.cache.UpdateQuoteFromStream(quote)
+					if cached, found := m.cache.GetSnapshot(quote.Symbol); found {
+						snapshot = cached
+					}
+				}
+				if snapshot == nil {
+					snapshot = &models.Snapshot{Symbol: quote.Symbol}
+				}
+				snapshot.LatestQuote = quote
+				if m.cache != nil {
+					m.cache.SetSnapshot(quote.Symbol, snapshot)
+				}
 				// Process quote data
 				m.logger.Debug("received quote", zap.String("symbol", quote.Symbol), zap.String("bid", quote.BidPrice.String()), zap.String("ask", quote.AskPrice.String()))
+				m.OnTick(quote.Symbol, snapshot)
 			}
 		})
 
