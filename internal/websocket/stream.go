@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -50,19 +51,33 @@ type subscribeMessage struct {
 }
 
 type streamMessage struct {
-	T  string          `json:"T"`  // message type
-	S  string          `json:"S"`  // symbol
-	X  string          `json:"x"`  // exchange
-	P  decimal.Decimal `json:"p"`  // price
-	S2 int32           `json:"s"`  // size
-	C  []string        `json:"c"`  // conditions
-	I  int64           `json:"i"`  // ID
-	Z  string          `json:"z"`  // tape
-	T2 time.Time       `json:"t"`  // timestamp
+	T string `json:"T"` // message type
+	S string `json:"S"` // symbol
+	X string `json:"x"` // exchange
+
+	// Fields for trades
+	P  decimal.Decimal `json:"p"` // price
+	S2 int32           `json:"s"` // size
+	I  int64           `json:"i"` // ID
+	Z  string          `json:"z"` // tape
+
+	// Fields shared by all messages
+	C  json.RawMessage `json:"c"` // conditions or close price
+	T2 time.Time       `json:"t"` // timestamp
+
+	// Quote-specific fields
 	BP decimal.Decimal `json:"bp"` // bid price
 	BS int32           `json:"bs"` // bid size
 	AP decimal.Decimal `json:"ap"` // ask price
 	AS int32           `json:"as"` // ask size
+
+	// Bar-specific fields
+	O  decimal.Decimal `json:"o"`
+	H  decimal.Decimal `json:"h"`
+	L  decimal.Decimal `json:"l"`
+	V  int64           `json:"v"`
+	N  int64           `json:"n"`
+	VW decimal.Decimal `json:"vw"`
 
 	// Error message fields
 	Code int    `json:"code"` // error code
@@ -241,12 +256,16 @@ func (c *StreamClient) handleMessages() {
 func (c *StreamClient) processMessage(msg streamMessage) {
 	switch msg.T {
 	case "t": // Trade
+		var conditions []string
+		if len(msg.C) > 0 {
+			_ = json.Unmarshal(msg.C, &conditions)
+		}
 		trade := &models.Trade{
 			Symbol:     msg.S,
 			Price:      msg.P,
 			Size:       msg.S2,
 			Timestamp:  msg.T2,
-			Conditions: msg.C,
+			Conditions: conditions,
 			ID:         msg.I,
 			Tape:       msg.Z,
 		}
@@ -256,6 +275,10 @@ func (c *StreamClient) processMessage(msg streamMessage) {
 		}
 
 	case "q": // Quote
+		var conditions []string
+		if len(msg.C) > 0 {
+			_ = json.Unmarshal(msg.C, &conditions)
+		}
 		quote := &models.Quote{
 			Symbol:     msg.S,
 			BidPrice:   msg.BP,
@@ -263,7 +286,7 @@ func (c *StreamClient) processMessage(msg streamMessage) {
 			AskPrice:   msg.AP,
 			AskSize:    msg.AS,
 			Timestamp:  msg.T2,
-			Conditions: msg.C,
+			Conditions: conditions,
 			Tape:       msg.Z,
 		}
 		c.cache.UpdateQuoteFromStream(quote)
@@ -272,9 +295,24 @@ func (c *StreamClient) processMessage(msg streamMessage) {
 		}
 
 	case "b": // Bar
-		// Handle bar messages if needed
+		var close decimal.Decimal
+		if len(msg.C) > 0 {
+			_ = json.Unmarshal(msg.C, &close)
+		}
+		bar := &models.Bar{
+			Symbol:     msg.S,
+			Open:       msg.O,
+			High:       msg.H,
+			Low:        msg.L,
+			Close:      close,
+			Volume:     msg.V,
+			Timestamp:  msg.T2,
+			TradeCount: msg.N,
+			VWAP:       msg.VW,
+		}
+		c.cache.SetBar(bar.Symbol, bar)
 		if handler, ok := c.handlers["bar"]; ok {
-			handler(msg)
+			handler(bar)
 		}
 
 	case "success":

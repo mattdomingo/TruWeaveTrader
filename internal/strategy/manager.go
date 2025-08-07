@@ -524,15 +524,19 @@ func (m *Manager) updateSymbolStream() {
 		// Register handlers for market data
 		m.stream.RegisterHandler("trade", func(msg interface{}) {
 			if trade, ok := msg.(*models.Trade); ok {
-				// Process trade data
 				m.logger.Debug("received trade", zap.String("symbol", trade.Symbol), zap.String("price", trade.Price.String()))
+				if snapshot, found := m.cache.GetSnapshot(trade.Symbol); found {
+					m.OnTick(trade.Symbol, snapshot)
+				}
 			}
 		})
 
 		m.stream.RegisterHandler("quote", func(msg interface{}) {
 			if quote, ok := msg.(*models.Quote); ok {
-				// Process quote data
 				m.logger.Debug("received quote", zap.String("symbol", quote.Symbol), zap.String("bid", quote.BidPrice.String()), zap.String("ask", quote.AskPrice.String()))
+				if snapshot, found := m.cache.GetSnapshot(quote.Symbol); found {
+					m.OnTick(quote.Symbol, snapshot)
+				}
 			}
 		})
 

@@ -60,20 +60,24 @@ func (c *Cache) SetQuote(symbol string, quote *models.Quote) {
 func (c *Cache) UpdateQuoteFromStream(quote *models.Quote) {
 	c.quotes.Set(quote.Symbol, quote, c.ttl)
 
-	// Also update the snapshot if it exists
-	if snapshot, found := c.GetSnapshot(quote.Symbol); found {
-		snapshot.LatestQuote = quote
-		c.SetSnapshot(quote.Symbol, snapshot)
+	// Always update the snapshot, creating one if needed
+	snapshot, found := c.GetSnapshot(quote.Symbol)
+	if !found || snapshot == nil {
+		snapshot = &models.Snapshot{Symbol: quote.Symbol}
 	}
+	snapshot.LatestQuote = quote
+	c.SetSnapshot(quote.Symbol, snapshot)
 }
 
 // UpdateTradeFromStream updates trade data from streaming
 func (c *Cache) UpdateTradeFromStream(trade *models.Trade) {
-	// Update the snapshot if it exists
-	if snapshot, found := c.GetSnapshot(trade.Symbol); found {
-		snapshot.LatestTrade = trade
-		c.SetSnapshot(trade.Symbol, snapshot)
+	// Always update the snapshot, creating one if needed
+	snapshot, found := c.GetSnapshot(trade.Symbol)
+	if !found || snapshot == nil {
+		snapshot = &models.Snapshot{Symbol: trade.Symbol}
 	}
+	snapshot.LatestTrade = trade
+	c.SetSnapshot(trade.Symbol, snapshot)
 }
 
 // GetBar retrieves cached bar data
