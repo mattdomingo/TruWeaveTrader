@@ -189,6 +189,10 @@ func (s *MomentumStrategy) OnTick(ctx context.Context, symbol string, data *mode
 
 	// Need enough bars for calculation
 	if len(symbolData.Bars) < s.longPeriod {
+		s.logger.Debug("not enough bars for momentum calculation",
+			zap.String("symbol", symbol),
+			zap.Int("bars", len(symbolData.Bars)),
+			zap.Int("required", s.longPeriod))
 		return nil
 	}
 
@@ -229,11 +233,27 @@ func (s *MomentumStrategy) OnTick(ctx context.Context, symbol string, data *mode
 	momentum := symbolData.ShortMA.Sub(symbolData.LongMA).Div(symbolData.LongMA).Mul(decimal.NewFromInt(100))
 	momentumStrength := momentum.Abs().InexactFloat64()
 
+	s.logger.Debug("momentum analysis",
+		zap.String("symbol", symbol),
+		zap.String("current_price", currentPrice.String()),
+		zap.String("short_ma", symbolData.ShortMA.String()),
+		zap.String("long_ma", symbolData.LongMA.String()),
+		zap.String("momentum", momentum.String()),
+		zap.Float64("momentum_strength", momentumStrength),
+		zap.Float64("min_momentum", s.minMomentum),
+		zap.String("trend", string(symbolData.Trend)),
+		zap.String("previous_trend", string(previousTrend)),
+		zap.String("rsi", symbolData.RSI.String()),
+		zap.String("position", symbolData.Position.String()))
+
 	// Generate signals
 	if symbolData.Trend == TrendUp && previousTrend != TrendUp &&
 		momentumStrength >= s.minMomentum &&
 		symbolData.RSI.LessThan(decimal.NewFromInt(70)) && // Not overbought
 		symbolData.Position.LessThanOrEqual(decimal.Zero) {
+		s.logger.Info("buy signal conditions met",
+			zap.String("symbol", symbol),
+			zap.String("reason", fmt.Sprintf("momentum crossover: %.2f%%", momentumStrength)))
 		return s.generateBuySignal(symbol, currentPrice, momentum, data)
 	}
 
@@ -243,6 +263,9 @@ func (s *MomentumStrategy) OnTick(ctx context.Context, symbol string, data *mode
 		symbolData.Position.GreaterThanOrEqual(decimal.Zero) {
 		// Only short if we have a long position to close
 		if symbolData.Position.GreaterThan(decimal.Zero) {
+			s.logger.Info("sell signal conditions met",
+				zap.String("symbol", symbol),
+				zap.String("reason", fmt.Sprintf("momentum crossover: %.2f%%", momentumStrength)))
 			return s.generateSellSignal(symbol, currentPrice, momentum, data)
 		}
 	}

@@ -57,8 +57,12 @@ func runStream(cmd *cobra.Command, args []string) error {
 
 	defer streamClient.Close()
 
+	// Track last activity time for status reporting
+	lastActivityTime := time.Now()
+
 	// Register handlers
 	streamClient.RegisterHandler("trade", func(msg interface{}) {
+		lastActivityTime = time.Now()
 		if trade, ok := msg.(*models.Trade); ok {
 			fmt.Printf("[%s] Trade: %s @ $%.2f x %d\n",
 				formatters.FormatTimestamp(trade.Timestamp),
@@ -69,6 +73,8 @@ func runStream(cmd *cobra.Command, args []string) error {
 	})
 
 	streamClient.RegisterHandler("quote", func(msg interface{}) {
+		lastActivityTime = time.Now()
+		fmt.Printf("🔍 DEBUG: Quote handler called with type: %T\n", msg)
 		if quote, ok := msg.(*models.Quote); ok {
 			spread := quote.AskPrice.Sub(quote.BidPrice)
 			fmt.Printf("[%s] Quote: %s Bid: %s x %d | Ask: %s x %d | Spread: $%.3f\n",
@@ -79,6 +85,8 @@ func runStream(cmd *cobra.Command, args []string) error {
 				formatters.ColorRed.Sprintf("$%.2f", quote.AskPrice.InexactFloat64()),
 				quote.AskSize,
 				spread.InexactFloat64())
+		} else {
+			fmt.Printf("🔍 DEBUG: Quote handler called but type assertion failed\n")
 		}
 	})
 
@@ -135,35 +143,7 @@ func runStream(cmd *cobra.Command, args []string) error {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
-	// Track last activity time
-	lastActivityTime := time.Now()
-
-	// Update activity time on data reception
-	streamClient.RegisterHandler("trade", func(msg interface{}) {
-		lastActivityTime = time.Now()
-		if trade, ok := msg.(*models.Trade); ok {
-			fmt.Printf("[%s] Trade: %s @ $%.2f x %d\n",
-				formatters.FormatTimestamp(trade.Timestamp),
-				formatters.ColorBlue.Sprint(trade.Symbol),
-				trade.Price.InexactFloat64(),
-				trade.Size)
-		}
-	})
-
-	streamClient.RegisterHandler("quote", func(msg interface{}) {
-		lastActivityTime = time.Now()
-		if quote, ok := msg.(*models.Quote); ok {
-			spread := quote.AskPrice.Sub(quote.BidPrice)
-			fmt.Printf("[%s] Quote: %s Bid: %s x %d | Ask: %s x %d | Spread: $%.3f\n",
-				formatters.FormatTimestamp(quote.Timestamp),
-				formatters.ColorBlue.Sprint(quote.Symbol),
-				formatters.ColorGreen.Sprintf("$%.2f", quote.BidPrice.InexactFloat64()),
-				quote.BidSize,
-				formatters.ColorRed.Sprintf("$%.2f", quote.AskPrice.InexactFloat64()),
-				quote.AskSize,
-				spread.InexactFloat64())
-		}
-	})
+	// Update activity time on data reception (handlers already registered above)
 
 	for {
 		select {

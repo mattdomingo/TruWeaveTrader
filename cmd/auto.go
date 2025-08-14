@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/TruWeaveTrader/alpaca-tui/internal/strategy"
@@ -22,6 +23,7 @@ func init() {
 	autoCmd.AddCommand(autoEnableCmd)
 	autoCmd.AddCommand(autoDisableCmd)
 	autoCmd.AddCommand(autoMetricsCmd)
+	autoCmd.AddCommand(autoDemoCmd)
 
 	// Add flags
 	autoAddCmd.Flags().String("type", "", "Strategy type (mean_reversion, momentum, pairs_trading)")
@@ -98,6 +100,92 @@ var autoMetricsCmd = &cobra.Command{
 	Short: "Show strategy performance metrics",
 	Args:  cobra.MaximumNArgs(1),
 	RunE:  runAutoMetrics,
+}
+
+var autoDemoCmd = &cobra.Command{
+	Use:   "demo",
+	Short: "Add and start a simple demo strategy to test trade execution and data flow",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// Check if strategies are enabled
+		if !cfg.StrategiesEnabled {
+			fmt.Println("🚫 Automated trading is disabled in configuration")
+			fmt.Println("   Set STRATEGIES_ENABLED=true to enable automation")
+			return nil
+		}
+
+		// Initialize default strategies from config if needed
+		if err := initializeDefaultStrategies(); err != nil {
+			return fmt.Errorf("failed to initialize strategies: %w", err)
+		}
+
+		// Add a simple demo strategy
+		name := "simple_demo_test"
+		params := map[string]interface{}{
+			"max_position_usd": 1000.0,
+		}
+		cfg := &strategy.StrategyConfig{
+			Name:       name,
+			Type:       "simple_demo",
+			Enabled:    true,
+			Symbols:    []string{"AAPL"}, // Just one symbol for simplicity
+			Parameters: params,
+			// Always-on schedule to allow testing at any time
+			Schedule: &strategy.ScheduleConfig{
+				StartTime: "00:00",
+				EndTime:   "23:59",
+				Days:      []int{0, 1, 2, 3, 4, 5, 6},
+				Timezone:  "America/New_York",
+			},
+		}
+
+		// Remove existing demo strategy if present
+		if _, exists := strategyManager.GetStrategy(name); exists {
+			strategyManager.RemoveStrategy(name)
+		}
+
+		// Create and add the demo strategy
+		strat := strategy.NewSimpleDemoStrategy(name, cfg.Symbols, cfg, strategyManager.SendSignal)
+		if err := strategyManager.AddStrategy(strat); err != nil {
+			return fmt.Errorf("failed to add demo strategy: %w", err)
+		}
+
+		// Start the strategy
+		if err := strategyManager.StartStrategy(name); err != nil {
+			return fmt.Errorf("failed to start demo strategy: %w", err)
+		}
+
+		fmt.Println("🚀 Simple demo strategy started!")
+		fmt.Println("📊 Strategy Details:")
+		fmt.Println("   - Name: simple_demo_test")
+		fmt.Println("   - Symbol: AAPL")
+		fmt.Println("   - Will generate BUY signal after 20 ticks")
+		fmt.Println("   - Will generate SELL signal after 40 ticks")
+		fmt.Println("\n⚡ Monitoring for market data...")
+		fmt.Println("   If no trades execute within 1-2 minutes, check:")
+		fmt.Println("   1. Market hours (9:30 AM - 4:00 PM ET)")
+		fmt.Println("   2. WebSocket connection in logs")
+		fmt.Println("   3. Run with DEBUG=true for detailed logs")
+		fmt.Println("\n🔄 Strategy is now running...")
+		fmt.Println("   Press Ctrl+C to stop")
+		fmt.Println("   Check positions with: ./alpaca-tui positions")
+		fmt.Println("   Check orders with: ./alpaca-tui orders")
+
+		// Keep the process running to receive market data
+		select {
+		case <-cmd.Context().Done():
+			fmt.Println("\n🛑 Stopping demo strategy...")
+			if err := strategyManager.StopStrategy(name); err != nil {
+				return fmt.Errorf("failed to stop demo strategy: %w", err)
+			}
+			// Clean up state
+			if err := strategy.RemoveAutomationState(); err != nil {
+				logger.Debug("failed to remove state file", zap.Error(err))
+			}
+			fmt.Println("✅ Demo strategy stopped successfully")
+		}
+
+		return nil
+	},
 }
 
 func runAutoStart(cmd *cobra.Command, args []string) error {
@@ -185,6 +273,13 @@ func runAutoStop(cmd *cobra.Command, args []string) error {
 		if err := strategyManager.StopAll(); err != nil {
 			return fmt.Errorf("failed to stop automation: %w", err)
 		}
+		// Clean up state file
+		if err := strategy.RemoveAutomationState(); err != nil {
+			// Only log if it's not a "file not found" error
+			if !strings.Contains(err.Error(), "no such file") {
+				logger.Warn("failed to remove automation state file", zap.Error(err))
+			}
+		}
 		fmt.Println("✅ Automated trading stopped successfully")
 	} else {
 		// Stop specific strategy
@@ -216,11 +311,40 @@ func runAutoStatus(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Printf("Trading Mode: %s\n", mode)
 
-	// Strategy status
+	// Try to read persisted state for cross-process monitoring
+	if state, err := strategy.ReadAutomationState(); err == nil && state != nil {
+		activeCount := 0
+		for _, s := range state.Strategies {
+			if s.Active {
+				activeCount++
+			}
+		}
+		fmt.Printf("\nDetected automation process PID %d (active=%v) with %d strategies (%d active).\n",
+			state.PID, state.Active, len(state.Strategies), activeCount)
+
+		selfPID := os.Getpid()
+		if state.PID != selfPID {
+			fmt.Printf("This status is from a different process (current PID %d).\n", selfPID)
+		}
+
+		if len(state.Strategies) > 0 {
+			fmt.Println("\nStrategies (from automation state):")
+			for _, s := range state.Strategies {
+				status := formatters.ColorRed.Sprint("STOPPED")
+				if s.Active {
+					status = formatters.ColorGreen.Sprint("RUNNING")
+				}
+				fmt.Printf("  • %s (%s) - %s\n", s.Name, s.Type, status)
+				fmt.Printf("    Symbols: %v\n", s.Symbols)
+			}
+		}
+	}
+
+	// Strategy status from current process manager (if running in same process)
 	strategies := strategyManager.ListStrategies()
 	activeStrategies := strategyManager.GetActiveStrategies()
 
-	fmt.Printf("\nStrategies: %d total, %d active\n", len(strategies), len(activeStrategies))
+	fmt.Printf("\nStrategies (this process): %d total, %d active\n", len(strategies), len(activeStrategies))
 
 	if len(strategies) > 0 {
 		fmt.Println("\nStrategy Details:")
@@ -243,6 +367,9 @@ func runAutoStatus(cmd *cobra.Command, args []string) error {
 				color.Sprint(status))
 			fmt.Printf("    Symbols: %v\n", s.GetSymbols())
 		}
+	} else {
+		fmt.Println("\nNo strategies configured in this process. Add one with:")
+		fmt.Println("  alpaca-tui auto add <name> --type momentum --symbols AAPL,MSFT")
 	}
 
 	return nil
@@ -326,6 +453,8 @@ func runAutoAdd(cmd *cobra.Command, args []string) error {
 		newStrategy = strategy.NewMomentumStrategy(strategyName, symbols, config, strategyManager.SendSignal)
 	case "pairs_trading":
 		newStrategy = strategy.NewPairsTradingStrategy(strategyName, config, strategyManager.SendSignal)
+	case "simple_demo":
+		newStrategy = strategy.NewSimpleDemoStrategy(strategyName, symbols, config, strategyManager.SendSignal)
 	default:
 		return fmt.Errorf("unknown strategy type: %s", strategyType)
 	}
@@ -515,6 +644,8 @@ func initializeDefaultStrategies() error {
 			newStrategy = strategy.NewMomentumStrategy(name, symbols, config, strategyManager.SendSignal)
 		case "pairs_trading":
 			newStrategy = strategy.NewPairsTradingStrategy(name, config, strategyManager.SendSignal)
+		case "simple_demo":
+			newStrategy = strategy.NewSimpleDemoStrategy(name, symbols, config, strategyManager.SendSignal)
 		default:
 			logger.Warn("unknown strategy type",
 				zap.String("name", name),

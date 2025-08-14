@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -35,38 +36,60 @@ type StreamClient struct {
 // Handler is a callback for stream messages
 type Handler func(message interface{})
 
-// Message types
-type authMessage struct {
-	Action string `json:"action"`
-	Key    string `json:"key"`
-	Secret string `json:"secret"`
+// Message envelopes and concrete message types
+// We decode per-type to avoid conflicting JSON keys (e.g., "c" is conditions for trades but close for bars)
+type messageEnvelope struct {
+	MessageType string    `json:"T"`
+	Timestamp   time.Time `json:"t,omitempty"` // Explicitly include to avoid conflicts
 }
 
-type subscribeMessage struct {
-	Action string   `json:"action"`
-	Trades []string `json:"trades,omitempty"`
-	Quotes []string `json:"quotes,omitempty"`
-	Bars   []string `json:"bars,omitempty"`
+type tradeMessage struct {
+	T    string          `json:"T"`
+	S    string          `json:"S"`
+	X    string          `json:"x"`
+	P    decimal.Decimal `json:"p"`
+	Size int32           `json:"s"`
+	C    []string        `json:"c"`
+	I    int64           `json:"i"`
+	Z    string          `json:"z"`
+	Time time.Time       `json:"t"`
 }
 
-type streamMessage struct {
-	T  string          `json:"T"`  // message type
-	S  string          `json:"S"`  // symbol
-	X  string          `json:"x"`  // exchange
-	P  decimal.Decimal `json:"p"`  // price
-	S2 int32           `json:"s"`  // size
-	C  []string        `json:"c"`  // conditions
-	I  int64           `json:"i"`  // ID
-	Z  string          `json:"z"`  // tape
-	T2 time.Time       `json:"t"`  // timestamp
-	BP decimal.Decimal `json:"bp"` // bid price
-	BS int32           `json:"bs"` // bid size
-	AP decimal.Decimal `json:"ap"` // ask price
-	AS int32           `json:"as"` // ask size
+type quoteMessage struct {
+	T        string          `json:"T"`
+	S        string          `json:"S"`
+	BidPrice decimal.Decimal `json:"bp"`
+	BidSize  int32           `json:"bs"`
+	AskPrice decimal.Decimal `json:"ap"`
+	AskSize  int32           `json:"as"`
+	Time     time.Time       `json:"t"`
+	C        []string        `json:"c"`
+	Z        string          `json:"z"`
+}
 
-	// Error message fields
-	Code int    `json:"code"` // error code
-	Msg  string `json:"msg"`  // error message
+type barMessage struct {
+	T      string          `json:"T"`
+	S      string          `json:"S"`
+	Open   decimal.Decimal `json:"o"`
+	High   decimal.Decimal `json:"h"`
+	Low    decimal.Decimal `json:"l"`
+	Close  decimal.Decimal `json:"c"`
+	Volume int64           `json:"v"`
+	Time   time.Time       `json:"t"`
+	Count  int64           `json:"n"`
+	VWAP   decimal.Decimal `json:"vw"`
+}
+
+type successMessage struct {
+	T   string `json:"T"`
+	Msg string `json:"msg"`
+}
+
+type errorMessage struct {
+	T    string `json:"T"`
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
+	S    string `json:"S"`
 }
 
 // NewStreamClient creates a new streaming client
@@ -116,7 +139,11 @@ func (c *StreamClient) Connect() error {
 	c.connectionAttempts = 0
 
 	// Authenticate immediately
-	auth := authMessage{
+	auth := struct {
+		Action string `json:"action"`
+		Key    string `json:"key"`
+		Secret string `json:"secret"`
+	}{
 		Action: "auth",
 		Key:    c.cfg.AlpacaKeyID,
 		Secret: c.cfg.AlpacaSecretKey,
@@ -147,21 +174,30 @@ func (c *StreamClient) Subscribe(symbols []string) error {
 	}
 
 	if c.isConnected && c.isAuthenticated {
+		c.logger.Info("Sending subscription", zap.Strings("symbols", symbols))
 		return c.subscribeSymbols(symbols)
 	}
 
+	// Not connected or not authenticated yet; stage the subscriptions
+	c.logger.Info("Staged subscriptions (will subscribe after authentication)", zap.Strings("symbols", symbols))
 	return nil
 }
 
 // subscribeSymbols sends subscription message
 func (c *StreamClient) subscribeSymbols(symbols []string) error {
-	msg := subscribeMessage{
+	msg := struct {
+		Action string   `json:"action"`
+		Trades []string `json:"trades,omitempty"`
+		Quotes []string `json:"quotes,omitempty"`
+		Bars   []string `json:"bars,omitempty"`
+	}{
 		Action: "subscribe",
 		Trades: symbols,
 		Quotes: symbols,
 		Bars:   symbols,
 	}
 
+	c.logger.Info("Sending subscription", zap.Strings("symbols", symbols))
 	return c.conn.WriteJSON(msg)
 }
 
@@ -176,7 +212,12 @@ func (c *StreamClient) Unsubscribe(symbols []string) error {
 	}
 
 	if c.isConnected && c.isAuthenticated {
-		msg := subscribeMessage{
+		msg := struct {
+			Action string   `json:"action"`
+			Trades []string `json:"trades,omitempty"`
+			Quotes []string `json:"quotes,omitempty"`
+			Bars   []string `json:"bars,omitempty"`
+		}{
 			Action: "unsubscribe",
 			Trades: symbols,
 			Quotes: symbols,
@@ -216,13 +257,12 @@ func (c *StreamClient) handleMessages() {
 		case <-c.ctx.Done():
 			return
 		default:
-			var msg []streamMessage
+			var rawMsgs []json.RawMessage
 
 			// Set read deadline
 			c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 
-			err := c.conn.ReadJSON(&msg)
-			if err != nil {
+			if err := c.conn.ReadJSON(&rawMsgs); err != nil {
 				if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 					c.logger.Error("Websocket read error", zap.Error(err))
 				}
@@ -230,25 +270,40 @@ func (c *StreamClient) handleMessages() {
 			}
 
 			// Process messages
-			for _, m := range msg {
-				c.processMessage(m)
+			for _, raw := range rawMsgs {
+				c.processMessage(raw)
 			}
 		}
 	}
 }
 
 // processMessage handles individual stream messages
-func (c *StreamClient) processMessage(msg streamMessage) {
-	switch msg.T {
+func (c *StreamClient) processMessage(raw json.RawMessage) {
+	var env messageEnvelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		c.logger.Error("failed to parse message envelope", zap.Error(err))
+		return
+	}
+
+	// Debug: uncomment to see raw messages
+	// fmt.Printf("🔍 DEBUG: Raw message: %s\n", string(raw))
+	// fmt.Printf("🔍 DEBUG: Parsed type: %s\n", env.MessageType)
+
+	switch env.MessageType {
 	case "t": // Trade
+		var tm tradeMessage
+		if err := json.Unmarshal(raw, &tm); err != nil {
+			c.logger.Error("failed to parse trade message", zap.Error(err))
+			return
+		}
 		trade := &models.Trade{
-			Symbol:     msg.S,
-			Price:      msg.P,
-			Size:       msg.S2,
-			Timestamp:  msg.T2,
-			Conditions: msg.C,
-			ID:         msg.I,
-			Tape:       msg.Z,
+			Symbol:     tm.S,
+			Price:      tm.P,
+			Size:       tm.Size,
+			Timestamp:  tm.Time,
+			Conditions: tm.C,
+			ID:         tm.I,
+			Tape:       tm.Z,
 		}
 		c.cache.UpdateTradeFromStream(trade)
 		if handler, ok := c.handlers["trade"]; ok {
@@ -256,15 +311,20 @@ func (c *StreamClient) processMessage(msg streamMessage) {
 		}
 
 	case "q": // Quote
+		var qm quoteMessage
+		if err := json.Unmarshal(raw, &qm); err != nil {
+			c.logger.Error("failed to parse quote message", zap.Error(err))
+			return
+		}
 		quote := &models.Quote{
-			Symbol:     msg.S,
-			BidPrice:   msg.BP,
-			BidSize:    msg.BS,
-			AskPrice:   msg.AP,
-			AskSize:    msg.AS,
-			Timestamp:  msg.T2,
-			Conditions: msg.C,
-			Tape:       msg.Z,
+			Symbol:     qm.S,
+			BidPrice:   qm.BidPrice,
+			BidSize:    qm.BidSize,
+			AskPrice:   qm.AskPrice,
+			AskSize:    qm.AskSize,
+			Timestamp:  qm.Time,
+			Conditions: qm.C,
+			Tape:       qm.Z,
 		}
 		c.cache.UpdateQuoteFromStream(quote)
 		if handler, ok := c.handlers["quote"]; ok {
@@ -272,41 +332,80 @@ func (c *StreamClient) processMessage(msg streamMessage) {
 		}
 
 	case "b": // Bar
-		// Handle bar messages if needed
+		var bm barMessage
+		if err := json.Unmarshal(raw, &bm); err != nil {
+			c.logger.Error("failed to parse bar message", zap.Error(err))
+			return
+		}
+		bar := &models.Bar{
+			Symbol:     bm.S,
+			Open:       bm.Open,
+			High:       bm.High,
+			Low:        bm.Low,
+			Close:      bm.Close,
+			Volume:     bm.Volume,
+			Timestamp:  bm.Time,
+			TradeCount: bm.Count,
+			VWAP:       bm.VWAP,
+		}
 		if handler, ok := c.handlers["bar"]; ok {
-			handler(msg)
+			handler(bar)
 		}
 
 	case "success":
-		c.logger.Info("Stream message", zap.String("type", msg.T))
+		var sm successMessage
+		if err := json.Unmarshal(raw, &sm); err != nil {
+			c.logger.Error("failed to parse success message", zap.Error(err))
+			return
+		}
+		c.logger.Info("Stream message", zap.String("type", env.MessageType), zap.String("msg", sm.Msg))
 
-		// Mark as authenticated on success
-		c.mu.Lock()
-		c.isAuthenticated = true
-		c.mu.Unlock()
+		// Mark as authenticated only on "authenticated" message, not "connected"
+		if sm.Msg == "authenticated" {
+			c.mu.Lock()
+			c.isAuthenticated = true
+			c.mu.Unlock()
+		}
 
 		// Resubscribe to existing symbols after authentication
-		if len(c.subscriptions) > 0 {
-			symbols := make([]string, 0, len(c.subscriptions))
-			for symbol := range c.subscriptions {
-				symbols = append(symbols, symbol)
+		if sm.Msg == "authenticated" {
+			c.mu.RLock()
+			haveSubs := len(c.subscriptions) > 0
+			c.mu.RUnlock()
+			if haveSubs {
+				symbols := make([]string, 0)
+				c.mu.RLock()
+				for symbol := range c.subscriptions {
+					symbols = append(symbols, symbol)
+				}
+				c.mu.RUnlock()
+				c.logger.Info("Resubscribing after authentication", zap.Strings("symbols", symbols))
+				if err := c.subscribeSymbols(symbols); err != nil {
+					c.logger.Error("Failed to resubscribe after authentication", zap.Error(err))
+				}
+			} else {
+				c.logger.Info("No staged subscriptions to resubscribe after authentication")
 			}
-			c.subscribeSymbols(symbols)
 		}
 
 	case "error":
+		var em errorMessage
+		if err := json.Unmarshal(raw, &em); err != nil {
+			c.logger.Error("failed to parse error message", zap.Error(err))
+			return
+		}
 		c.logger.Error("Stream error",
-			zap.String("type", msg.T),
-			zap.Int("code", msg.Code),
-			zap.String("message", msg.Msg),
-			zap.String("symbol", msg.S))
+			zap.String("type", env.MessageType),
+			zap.Int("code", em.Code),
+			zap.String("message", em.Msg),
+			zap.String("symbol", em.S))
 
 		// Handle specific error codes
-		if msg.Code == 406 { // Connection limit exceeded
+		if em.Code == 406 { // Connection limit exceeded
 			c.logger.Error("Connection limit exceeded - waiting longer before retry")
 			// Increase retry delay for connection limit errors
 			c.reconnectDelay = 30 * time.Second
-		} else if msg.Code == 401 { // Authentication error
+		} else if em.Code == 401 { // Authentication error
 			c.logger.Error("Authentication failed - check API credentials")
 			c.mu.Lock()
 			c.isAuthenticated = false
@@ -314,7 +413,7 @@ func (c *StreamClient) processMessage(msg streamMessage) {
 		}
 
 		if handler, ok := c.handlers["error"]; ok {
-			handler(msg)
+			handler(em)
 		}
 	}
 }

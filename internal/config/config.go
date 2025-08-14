@@ -53,14 +53,14 @@ func Load() (*Config, error) {
 		DefaultTimeframe: getEnv("DEFAULT_TIMEFRAME", "1Min"),
 
 		// Risk Management
-		RiskMaxPositionUSD:   getEnvFloat("RISK_MAX_POSITION_USD", 10000.0), //knobs to turn with Owen's Model
-		RiskMaxDailyLossUSD:  getEnvFloat("RISK_MAX_DAILY_LOSS_USD", 1000.0),
-		RiskMaxSpreadPercent: getEnvFloat("RISK_MAX_SPREAD_PERCENT", 0.5),
+		RiskMaxPositionUSD:   getEnvFloat("RISK_MAX_POSITION_USD", 20000.0),
+		RiskMaxDailyLossUSD:  getEnvFloat("RISK_MAX_DAILY_LOSS_USD", 5000.0),
+		RiskMaxSpreadPercent: getEnvFloat("RISK_MAX_SPREAD_PERCENT", 1.0),
 
 		// Performance
 		CacheTTL:                getEnvDuration("CACHE_TTL_MS", 100) * time.Millisecond,
 		WebsocketReconnectDelay: getEnvDuration("WEBSOCKET_RECONNECT_DELAY_MS", 1000) * time.Millisecond,
-		HTTPTimeout:             getEnvDuration("HTTP_TIMEOUT_MS", 2000) * time.Millisecond,
+		HTTPTimeout:             getEnvDuration("HTTP_TIMEOUT_MS", 3000) * time.Millisecond,
 
 		// Strategy Configuration
 		StrategiesEnabled: getEnvBool("STRATEGIES_ENABLED", false),
@@ -117,7 +117,7 @@ func getEnvDuration(key string, defaultValue int64) time.Duration {
 
 // loadStrategyConfigs loads strategy configurations from environment or returns default configs
 func loadStrategyConfigs() []map[string]interface{} {
-	// Default strategy configurations
+	// Default strategy configurations (loosened for demo)
 	return []map[string]interface{}{
 		{
 			"name":    "mean_reversion_tech",
@@ -125,27 +125,15 @@ func loadStrategyConfigs() []map[string]interface{} {
 			"enabled": true,
 			"symbols": []interface{}{"FIG", "NEGG", "NVDA", "META"},
 			"parameters": map[string]interface{}{
-				"lookback_period": 5,
-				/*
-					Shorter Lookback (10 periods):
-					✅ More responsive to recent price changes
-					✅ Faster signals when trends change
-					❌ More noise - can trigger on temporary spikes
-					❌ More false signals in choppy markets
-					Longer Lookback (20 periods):
-					✅ Smoother signals - less noise
-					✅ More reliable in choppy markets
-					❌ Slower to react to trend changes
-					❌ Misses opportunities in fast-moving markets
-				*/
-				"threshold_percent": 0.5,     //lower threshold
-				"max_position_usd":  10000.0, //larger position
-				"cooldown_minutes":  1,       //faster trading
+				"lookback_period":   5,
+				"threshold_percent": 0.25,
+				"max_position_usd":  15000.0,
+				"cooldown_minutes":  1,
 			},
 			"schedule": map[string]interface{}{
 				"start_time": "09:30",
 				"end_time":   "16:00",
-				"days":       []int{1, 2, 3, 4, 5}, // Mon-Fri
+				"days":       []int{1, 2, 3, 4, 5},
 				"timezone":   "America/New_York",
 			},
 		},
@@ -155,14 +143,14 @@ func loadStrategyConfigs() []map[string]interface{} {
 			"enabled": true,
 			"symbols": []interface{}{"AAPL", "MSFT", "GOOGL", "TSLA"},
 			"parameters": map[string]interface{}{
-				"short_period":        3,       // Very short MA (was 10)
-				"long_period":         7,       // Short long MA (was 30)
-				"rsi_period":          7,       // Shorter RSI (was 14)
-				"stop_loss_percent":   1.0,     // Tighter stop loss (was 2.0)
-				"take_profit_percent": 2.0,     // Lower take profit (was 4.0)
-				"min_momentum":        0.1,     // Very low momentum requirement (was 1.0)
-				"max_position_usd":    15000.0, // Larger position (was 8000)
-				"cooldown_minutes":    1,       // Minimal cooldown (was 15)
+				"short_period":        3,
+				"long_period":         5,
+				"rsi_period":          7,
+				"stop_loss_percent":   2.0,
+				"take_profit_percent": 3.0,
+				"min_momentum":        0.05,
+				"max_position_usd":    20000.0,
+				"cooldown_minutes":    1,
 			},
 			"schedule": map[string]interface{}{
 				"start_time": "09:30",
@@ -175,25 +163,17 @@ func loadStrategyConfigs() []map[string]interface{} {
 			"name":    "pairs_tech_correlation",
 			"type":    "pairs_trading",
 			"enabled": true,
-			"symbols": []interface{}{}, // Will be derived from pairs
+			"symbols": []interface{}{},
 			"parameters": map[string]interface{}{
-				"lookback_period":     20,      // Shorter lookback (was 60)
-				"entry_threshold":     1.0,     // Lower entry threshold (was 2.0)
-				"exit_threshold":      0.1,     // Lower exit threshold (was 0.5)
-				"stop_loss_threshold": 2.0,     // Lower stop loss (was 3.0)
-				"max_position_usd":    20000.0, // Larger position (was 10000)
-				"cooldown_minutes":    1,       // Minimal cooldown (was 30)
+				"lookback_period":     15,
+				"entry_threshold":     0.75,
+				"exit_threshold":      0.1,
+				"stop_loss_threshold": 1.5,
+				"max_position_usd":    25000.0,
+				"cooldown_minutes":    1,
 				"pairs": []map[string]interface{}{
-					{
-						"symbol1": "NVDA",
-						"symbol2": "AMD",
-						"ratio":   1.0,
-					},
-					{
-						"symbol1": "META",
-						"symbol2": "GOOGL",
-						"ratio":   1.0,
-					},
+					{"symbol1": "NVDA", "symbol2": "AMD", "ratio": 1.0},
+					{"symbol1": "META", "symbol2": "GOOGL", "ratio": 1.0},
 				},
 			},
 			"schedule": map[string]interface{}{

@@ -2,8 +2,11 @@ package strategy
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"sync"
+	"time"
 
 	"github.com/TruWeaveTrader/alpaca-tui/internal/alpaca"
 	"github.com/TruWeaveTrader/alpaca-tui/internal/cache"
@@ -11,6 +14,7 @@ import (
 	"github.com/TruWeaveTrader/alpaca-tui/internal/models"
 	"github.com/TruWeaveTrader/alpaca-tui/internal/risk"
 	"github.com/TruWeaveTrader/alpaca-tui/internal/websocket"
+	"github.com/shopspring/decimal"
 	"go.uber.org/zap"
 )
 
@@ -36,6 +40,10 @@ type Manager struct {
 	// Active symbols being monitored
 	activeSymbols map[string]bool
 	symbolMu      sync.RWMutex
+
+	// Bar aggregation from trades
+	barMu       sync.Mutex
+	currentBars map[string]*models.Bar
 }
 
 // NewManager creates a new strategy manager
@@ -54,6 +62,7 @@ func NewManager(client *alpaca.Client, risk *risk.Manager, stream *websocket.Str
 		cancel:        cancel,
 		signalChan:    make(chan *Signal, 100),
 		activeSymbols: make(map[string]bool),
+		currentBars:   make(map[string]*models.Bar),
 	}
 }
 
@@ -75,11 +84,12 @@ func (m *Manager) AddStrategy(strategy Strategy) error {
 	m.strategies[name] = strategy
 	m.logger.Info("strategy added", zap.String("name", name), zap.String("type", strategy.Type()))
 
-	// Add symbols to monitoring list if manager is active
+	// If manager is active, refresh subscriptions to include new strategy symbols
 	if m.active {
-		m.addSymbolsToStream(strategy.GetSymbols())
+		m.updateSymbolStream()
 	}
 
+	m.persistStateLocked()
 	return nil
 }
 
@@ -113,6 +123,7 @@ func (m *Manager) RemoveStrategy(name string) error {
 		m.updateSymbolStream()
 	}
 
+	m.persistStateLocked()
 	return nil
 }
 
@@ -153,28 +164,34 @@ func (m *Manager) GetActiveStrategies() []Strategy {
 
 // StartStrategy starts a specific strategy
 func (m *Manager) StartStrategy(name string) error {
-	m.mu.RLock()
+	m.mu.Lock()
 	strategy, exists := m.strategies[name]
-	m.mu.RUnlock()
-
 	if !exists {
+		m.mu.Unlock()
 		return fmt.Errorf("strategy %s not found", name)
 	}
-
 	if strategy.IsActive() {
+		m.mu.Unlock()
 		return fmt.Errorf("strategy %s is already active", name)
 	}
+
+	// Ensure manager is active (single-strategy start should bring up processing and streaming)
+	wasInactive := !m.active
+	if wasInactive {
+		m.active = true
+		go m.processSignals()
+	}
+	m.mu.Unlock()
 
 	if err := strategy.Start(m.ctx); err != nil {
 		return fmt.Errorf("failed to start strategy %s: %w", name, err)
 	}
 
-	// Add symbols to stream if manager is active
-	if m.active {
-		m.addSymbolsToStream(strategy.GetSymbols())
-	}
+	// Refresh subscriptions
+	m.updateSymbolStream()
 
 	m.logger.Info("strategy started", zap.String("name", name))
+	m.persistState()
 	return nil
 }
 
@@ -202,6 +219,7 @@ func (m *Manager) StopStrategy(name string) error {
 	}
 
 	m.logger.Info("strategy stopped", zap.String("name", name))
+	m.persistState()
 	return nil
 }
 
@@ -231,6 +249,8 @@ func (m *Manager) StartAll() error {
 	m.updateSymbolStream()
 
 	m.logger.Info("strategy manager started", zap.Int("strategies", len(m.strategies)))
+
+	m.persistStateLocked()
 	return nil
 }
 
@@ -259,6 +279,11 @@ func (m *Manager) StopAll() error {
 
 	// Close signal channel
 	close(m.signalChan)
+
+	// Remove automation state file to indicate automation is stopped
+	if err := RemoveAutomationState(); err != nil {
+		m.logger.Warn("failed to remove automation state", zap.Error(err))
+	}
 
 	m.logger.Info("strategy manager stopped")
 	return nil
@@ -354,12 +379,28 @@ func (m *Manager) OnBar(symbol string, bar *models.Bar) {
 // SendSignal sends a trading signal to be processed
 func (m *Manager) SendSignal(signal *Signal) {
 	if !m.active {
+		m.logger.Warn("manager not active, dropping signal",
+			zap.String("strategy", signal.Strategy),
+			zap.String("symbol", signal.Symbol))
 		return
 	}
 
+	m.logger.Info("received trading signal",
+		zap.String("strategy", signal.Strategy),
+		zap.String("symbol", signal.Symbol),
+		zap.String("action", string(signal.Action)),
+		zap.String("quantity", signal.Quantity.String()),
+		zap.String("reason", signal.Reason))
+
 	select {
 	case m.signalChan <- signal:
+		m.logger.Debug("signal queued for processing",
+			zap.String("strategy", signal.Strategy),
+			zap.String("symbol", signal.Symbol))
 	case <-m.ctx.Done():
+		m.logger.Debug("context cancelled, dropping signal",
+			zap.String("strategy", signal.Strategy),
+			zap.String("symbol", signal.Symbol))
 		return
 	default:
 		m.logger.Warn("signal channel full, dropping signal",
@@ -405,11 +446,19 @@ func (m *Manager) executeSignal(signal *Signal) {
 
 	logger.Info("executing signal", zap.String("reason", signal.Reason))
 
-	// Get current market data for validation
+	// Get current market data for validation (fallback to cache if API snapshot fails)
 	snapshot, err := m.client.GetSnapshot(m.ctx, signal.Symbol)
 	if err != nil {
-		logger.Error("failed to get market snapshot", zap.Error(err))
-		return
+		logger.Warn("failed to get market snapshot from API, falling back to cache", zap.Error(err))
+		if m.cache != nil {
+			if cached, found := m.cache.GetSnapshot(signal.Symbol); found {
+				snapshot = cached
+			} else {
+				snapshot = &models.Snapshot{Symbol: signal.Symbol}
+			}
+		} else {
+			snapshot = &models.Snapshot{Symbol: signal.Symbol}
+		}
 	}
 
 	// Get account information
@@ -446,7 +495,7 @@ func (m *Manager) executeSignal(signal *Signal) {
 	}
 
 	// Validate spread if we have quote data
-	if snapshot.LatestQuote != nil {
+	if snapshot != nil && snapshot.LatestQuote != nil {
 		spreadResult := m.risk.CheckSpread(snapshot.LatestQuote)
 		if !spreadResult.Passed {
 			logger.Warn("signal rejected due to spread", zap.String("reason", spreadResult.Reason))
@@ -507,18 +556,22 @@ func (m *Manager) updateSymbolStream() {
 
 	// Connect to websocket and subscribe to symbols
 	if m.stream != nil && len(symbols) > 0 {
-		// Connect to websocket if not already connected
-		if !m.stream.IsConnected() {
-			if err := m.stream.Connect(); err != nil {
-				m.logger.Error("failed to connect to websocket", zap.Error(err))
-				return
-			}
+		// Stage subscriptions BEFORE connecting to avoid race with auth
+		if err := m.stream.Subscribe(symbols); err != nil {
+			m.logger.Error("failed to stage/subscribe symbols", zap.Error(err))
+		} else {
+			m.logger.Info("staged symbol subscriptions", zap.Strings("symbols", symbols))
 		}
 
-		// Subscribe to symbols
-		if err := m.stream.Subscribe(symbols); err != nil {
-			m.logger.Error("failed to subscribe to symbols", zap.Error(err))
-			return
+		// Connect to websocket if not already connected
+		if !m.stream.IsConnected() {
+			m.logger.Info("connecting to websocket for market data streaming")
+			if err := m.stream.Connect(); err != nil {
+				m.logger.Error("failed to connect to websocket", zap.Error(err))
+				// Continue anyway - strategies might work with polling or other data sources
+			} else {
+				m.logger.Info("websocket connected successfully")
+			}
 		}
 
 		// Register handlers for market data
@@ -541,7 +594,12 @@ func (m *Manager) updateSymbolStream() {
 				}
 				// Process trade data
 				m.logger.Debug("received trade", zap.String("symbol", trade.Symbol), zap.String("price", trade.Price.String()))
+
+				// Emit tick to strategies
 				m.OnTick(trade.Symbol, snapshot)
+
+				// Update bar aggregator from trade
+				m.updateAggregatedBarFromTrade(trade)
 			}
 		})
 
@@ -565,6 +623,9 @@ func (m *Manager) updateSymbolStream() {
 				// Process quote data
 				m.logger.Debug("received quote", zap.String("symbol", quote.Symbol), zap.String("bid", quote.BidPrice.String()), zap.String("ask", quote.AskPrice.String()))
 				m.OnTick(quote.Symbol, snapshot)
+
+				// Update bar aggregator from quote mid price (in case trade stream is limited)
+				m.updateAggregatedBarFromQuote(quote)
 			}
 		})
 
@@ -575,5 +636,141 @@ func (m *Manager) updateSymbolStream() {
 				m.OnBar(bar.Symbol, bar)
 			}
 		})
+	}
+}
+
+// updateAggregatedBarFromTrade updates or finalizes a 1-minute bar from trade ticks
+func (m *Manager) updateAggregatedBarFromTrade(trade *models.Trade) {
+	minute := trade.Timestamp.Truncate(time.Minute)
+
+	m.barMu.Lock()
+	defer m.barMu.Unlock()
+
+	bar, exists := m.currentBars[trade.Symbol]
+	if !exists || bar == nil || bar.Timestamp.Before(minute) {
+		// Finalize previous bar if it exists and emit
+		if exists && bar != nil {
+			prev := *bar
+			m.logger.Debug("finalizing bar", zap.String("symbol", prev.Symbol), zap.Time("timestamp", prev.Timestamp), zap.String("close", prev.Close.String()))
+			go m.OnBar(prev.Symbol, &prev)
+		}
+		// Start new bar
+		m.currentBars[trade.Symbol] = &models.Bar{
+			Symbol:     trade.Symbol,
+			Open:       trade.Price,
+			High:       trade.Price,
+			Low:        trade.Price,
+			Close:      trade.Price,
+			Volume:     int64(trade.Size),
+			Timestamp:  minute,
+			TradeCount: 1,
+			VWAP:       decimal.Zero,
+		}
+		return
+	}
+
+	// Update existing bar
+	if trade.Price.GreaterThan(bar.High) {
+		bar.High = trade.Price
+	}
+	if trade.Price.LessThan(bar.Low) {
+		bar.Low = trade.Price
+	}
+	bar.Close = trade.Price
+	bar.Volume += int64(trade.Size)
+	bar.TradeCount++
+}
+
+// updateAggregatedBarFromQuote updates bar data from quotes using mid-price
+func (m *Manager) updateAggregatedBarFromQuote(quote *models.Quote) {
+	price := decimal.Zero
+	if !quote.BidPrice.IsZero() && !quote.AskPrice.IsZero() {
+		price = quote.BidPrice.Add(quote.AskPrice).Div(decimal.NewFromInt(2))
+	} else if !quote.BidPrice.IsZero() {
+		price = quote.BidPrice
+	} else if !quote.AskPrice.IsZero() {
+		price = quote.AskPrice
+	}
+	if price.IsZero() {
+		return
+	}
+
+	minute := quote.Timestamp.Truncate(time.Minute)
+
+	m.barMu.Lock()
+	defer m.barMu.Unlock()
+
+	bar, exists := m.currentBars[quote.Symbol]
+	if !exists || bar == nil || bar.Timestamp.Before(minute) {
+		// Finalize previous bar if it exists and emit
+		if exists && bar != nil {
+			prev := *bar
+			m.logger.Debug("finalizing bar (quote)", zap.String("symbol", prev.Symbol), zap.Time("timestamp", prev.Timestamp), zap.String("close", prev.Close.String()))
+			go m.OnBar(prev.Symbol, &prev)
+		}
+		// Start new bar (volume/tradecount unknown from quotes)
+		m.currentBars[quote.Symbol] = &models.Bar{
+			Symbol:     quote.Symbol,
+			Open:       price,
+			High:       price,
+			Low:        price,
+			Close:      price,
+			Volume:     0,
+			Timestamp:  minute,
+			TradeCount: 0,
+			VWAP:       decimal.Zero,
+		}
+		return
+	}
+
+	// Update existing bar
+	if price.GreaterThan(bar.High) {
+		bar.High = price
+	}
+	if price.LessThan(bar.Low) {
+		bar.Low = price
+	}
+	bar.Close = price
+}
+
+// persistState and persistStateLocked persist current automation state to disk
+func (m *Manager) persistState() {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	m.persistStateLocked()
+}
+
+func (m *Manager) persistStateLocked() {
+	strategies := make([]StrategyStatus, 0, len(m.strategies))
+	hasActiveStrategy := false
+	for _, s := range m.strategies {
+		isActive := s.IsActive()
+		if isActive {
+			hasActiveStrategy = true
+		}
+		strategies = append(strategies, StrategyStatus{
+			Name:    s.Name(),
+			Type:    s.Type(),
+			Symbols: s.GetSymbols(),
+			Active:  isActive,
+		})
+	}
+
+	// Only persist state if there are active strategies
+	if hasActiveStrategy {
+		state := &AutomationState{
+			PID:        os.Getpid(),
+			StartedAt:  time.Now(),
+			Active:     m.active && hasActiveStrategy,
+			Strategies: strategies,
+		}
+		if err := WriteAutomationState(state); err != nil {
+			m.logger.Warn("failed to write automation state", zap.Error(err))
+		}
+	} else {
+		// Remove state file if no active strategies
+		if err := RemoveAutomationState(); err != nil && !errors.Is(err, os.ErrNotExist) {
+			m.logger.Warn("failed to remove automation state", zap.Error(err))
+		}
 	}
 }

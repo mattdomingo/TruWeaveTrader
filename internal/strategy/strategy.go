@@ -244,10 +244,18 @@ func (b *BaseStrategy) CheckSchedule() bool {
 
 	now := time.Now()
 
-	// Check if today is in allowed days
+	// Check if today is in allowed days (use schedule timezone if provided)
+	loc := time.Local
+	if b.config.Schedule.Timezone != "" {
+		if tz, err := time.LoadLocation(b.config.Schedule.Timezone); err == nil {
+			loc = tz
+		}
+	}
+
+	today := now.In(loc)
 	dayAllowed := false
 	for _, day := range b.config.Schedule.Days {
-		if int(now.Weekday()) == day {
+		if int(today.Weekday()) == day {
 			dayAllowed = true
 			break
 		}
@@ -257,18 +265,18 @@ func (b *BaseStrategy) CheckSchedule() bool {
 		return false
 	}
 
-	// Check time range
-	startTime, err := time.Parse("15:04", b.config.Schedule.StartTime)
+	// Check time range in the specified timezone
+	startTime, err := time.ParseInLocation("15:04", b.config.Schedule.StartTime, loc)
 	if err != nil {
 		return true // Invalid time format, assume always active
 	}
 
-	endTime, err := time.Parse("15:04", b.config.Schedule.EndTime)
+	endTime, err := time.ParseInLocation("15:04", b.config.Schedule.EndTime, loc)
 	if err != nil {
 		return true // Invalid time format, assume always active
 	}
 
-	currentTime, _ := time.Parse("15:04", now.Format("15:04"))
+	currentTime, _ := time.ParseInLocation("15:04", today.Format("15:04"), loc)
 
 	return currentTime.After(startTime) && currentTime.Before(endTime)
 }
