@@ -120,14 +120,14 @@ func loadStrategyConfigs() []map[string]interface{} {
 	// Default strategy configurations (loosened for demo)
 	return []map[string]interface{}{
 		{
-			"name":    "mean_reversion_tech",
+			"name":    "meanrev_etfs",
 			"type":    "mean_reversion",
 			"enabled": true,
-			"symbols": []interface{}{"FIG", "NEGG", "NVDA", "META"},
+			"symbols": []interface{}{"SPY", "QQQ", "IWM", "DIA", "XLF", "XLE", "XLV", "XLY"},
 			"parameters": map[string]interface{}{
-				"lookback_period":   5,
-				"threshold_percent": 0.25,
-				"max_position_usd":  15000.0,
+				"lookback_period":   10,
+				"threshold_percent": 0.15,
+				"max_position_usd":  12000.0,
 				"cooldown_minutes":  1,
 			},
 			"schedule": map[string]interface{}{
@@ -138,18 +138,18 @@ func loadStrategyConfigs() []map[string]interface{} {
 			},
 		},
 		{
-			"name":    "momentum_trending",
+			"name":    "momentum_liquid",
 			"type":    "momentum",
 			"enabled": true,
-			"symbols": []interface{}{"AAPL", "MSFT", "GOOGL", "TSLA"},
+			"symbols": []interface{}{"AAPL", "MSFT", "AMZN", "NVDA", "GOOGL", "META", "TSLA", "AMD", "NFLX", "CRM", "UBER", "SHOP", "INTC", "ADBE", "CSCO", "ORCL", "BA", "DIS", "JPM", "XOM", "AVGO", "V"},
 			"parameters": map[string]interface{}{
 				"short_period":        3,
-				"long_period":         5,
+				"long_period":         10,
 				"rsi_period":          7,
 				"stop_loss_percent":   2.0,
 				"take_profit_percent": 3.0,
-				"min_momentum":        0.05,
-				"max_position_usd":    20000.0,
+				"min_momentum":        0.1,
+				"max_position_usd":    15000.0,
 				"cooldown_minutes":    1,
 			},
 			"schedule": map[string]interface{}{
@@ -165,11 +165,11 @@ func loadStrategyConfigs() []map[string]interface{} {
 			"enabled": true,
 			"symbols": []interface{}{},
 			"parameters": map[string]interface{}{
-				"lookback_period":     15,
+				"lookback_period":     20,
 				"entry_threshold":     0.75,
-				"exit_threshold":      0.1,
+				"exit_threshold":      0.2,
 				"stop_loss_threshold": 1.5,
-				"max_position_usd":    25000.0,
+				"max_position_usd":    15000.0,
 				"cooldown_minutes":    1,
 				"pairs": []map[string]interface{}{
 					{"symbol1": "NVDA", "symbol2": "AMD", "ratio": 1.0},

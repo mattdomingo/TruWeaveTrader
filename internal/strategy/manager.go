@@ -18,6 +18,12 @@ import (
 	"go.uber.org/zap"
 )
 
+// marketDebugEnabled checks env DEBUG for noisy market data logs
+func marketDebugEnabled() bool {
+	// Avoid importing extra packages here; os is already imported
+	return os.Getenv("DEBUG") == "true" || os.Getenv("DEBUG") == "1" || os.Getenv("DEBUG") == "yes"
+}
+
 // Manager orchestrates multiple trading strategies
 type Manager struct {
 	strategies map[string]Strategy
@@ -44,6 +50,11 @@ type Manager struct {
 	// Bar aggregation from trades
 	barMu       sync.Mutex
 	currentBars map[string]*models.Bar
+
+	// Polling for orders/positions
+	pollInterval          time.Duration
+	lastOrderSnapshots    map[string]orderSnapshot
+	lastPositionSnapshots map[string]positionSnapshot
 }
 
 // NewManager creates a new strategy manager
@@ -63,6 +74,10 @@ func NewManager(client *alpaca.Client, risk *risk.Manager, stream *websocket.Str
 		signalChan:    make(chan *Signal, 100),
 		activeSymbols: make(map[string]bool),
 		currentBars:   make(map[string]*models.Bar),
+
+		pollInterval:          2 * time.Second,
+		lastOrderSnapshots:    make(map[string]orderSnapshot),
+		lastPositionSnapshots: make(map[string]positionSnapshot),
 	}
 }
 
@@ -179,7 +194,13 @@ func (m *Manager) StartStrategy(name string) error {
 	wasInactive := !m.active
 	if wasInactive {
 		m.active = true
+		// Recreate lifecycle primitives on restart
+		m.ctx, m.cancel = context.WithCancel(context.Background())
+		m.signalChan = make(chan *Signal, 100)
+		m.lastOrderSnapshots = make(map[string]orderSnapshot)
+		m.lastPositionSnapshots = make(map[string]positionSnapshot)
 		go m.processSignals()
+		m.startPollingLocked()
 	}
 	m.mu.Unlock()
 
@@ -234,8 +255,15 @@ func (m *Manager) StartAll() error {
 
 	m.active = true
 
+	// Recreate lifecycle primitives on restart
+	m.ctx, m.cancel = context.WithCancel(context.Background())
+	m.signalChan = make(chan *Signal, 100)
+	m.lastOrderSnapshots = make(map[string]orderSnapshot)
+	m.lastPositionSnapshots = make(map[string]positionSnapshot)
+
 	// Start signal processing goroutine
 	go m.processSignals()
+	m.startPollingLocked()
 
 	// Start all strategies
 	for name, strategy := range m.strategies {
@@ -515,6 +543,186 @@ func (m *Manager) executeSignal(signal *Signal) {
 		zap.String("status", string(placedOrder.Status)))
 }
 
+// --- Polling and fan-out for orders and positions ---
+
+type orderSnapshot struct {
+	Status         models.OrderStatus
+	FilledQty      decimal.Decimal
+	FilledAvgPrice *decimal.Decimal
+}
+
+type positionSnapshot struct {
+	Qty           decimal.Decimal
+	AvgEntryPrice decimal.Decimal
+}
+
+// startPollingLocked must be called while holding m.mu when activating the manager
+func (m *Manager) startPollingLocked() {
+	go m.pollOrders()
+	go m.pollPositions()
+}
+
+func (m *Manager) pollOrders() {
+	// initial sync
+	m.pollOrdersOnce()
+
+	ticker := time.NewTicker(m.pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-ticker.C:
+			m.pollOrdersOnce()
+		}
+	}
+}
+
+func (m *Manager) pollOrdersOnce() {
+	orders, err := m.client.GetOrders(m.ctx, "all")
+	if err != nil {
+		m.logger.Debug("failed to poll orders", zap.Error(err))
+		return
+	}
+
+	for _, o := range orders {
+		snap := orderSnapshot{
+			Status:         o.Status,
+			FilledQty:      o.FilledQty,
+			FilledAvgPrice: o.FilledAvgPrice,
+		}
+
+		prev, ok := m.lastOrderSnapshots[o.ID]
+		changed := !ok ||
+			prev.Status != snap.Status ||
+			!prev.FilledQty.Equal(snap.FilledQty) ||
+			((prev.FilledAvgPrice == nil) != (snap.FilledAvgPrice == nil)) ||
+			(prev.FilledAvgPrice != nil && snap.FilledAvgPrice != nil && !prev.FilledAvgPrice.Equal(*snap.FilledAvgPrice))
+
+		if changed {
+			m.lastOrderSnapshots[o.ID] = snap
+			m.fanOutOrderUpdate(o)
+		}
+	}
+}
+
+func (m *Manager) pollPositions() {
+	// initial sync
+	m.pollPositionsOnce()
+
+	ticker := time.NewTicker(m.pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-ticker.C:
+			m.pollPositionsOnce()
+		}
+	}
+}
+
+func (m *Manager) pollPositionsOnce() {
+	positions, err := m.client.GetPositions(m.ctx)
+	if err != nil {
+		m.logger.Debug("failed to poll positions", zap.Error(err))
+		return
+	}
+
+	current := make(map[string]positionSnapshot)
+	for _, p := range positions {
+		current[p.Symbol] = positionSnapshot{
+			Qty:           p.Qty,
+			AvgEntryPrice: p.AvgEntryPrice,
+		}
+
+		prev, ok := m.lastPositionSnapshots[p.Symbol]
+		changed := !ok || !prev.Qty.Equal(p.Qty) || !prev.AvgEntryPrice.Equal(p.AvgEntryPrice)
+		if changed {
+			m.fanOutPositionUpdate(p)
+		}
+	}
+
+	// Detect positions that were closed (existed before, not present now)
+	for sym, prev := range m.lastPositionSnapshots {
+		if _, still := current[sym]; !still {
+			// synthesize a zero-qty update
+			pos := &models.Position{
+				Symbol:        sym,
+				Qty:           decimal.Zero,
+				AvgEntryPrice: prev.AvgEntryPrice,
+			}
+			m.fanOutPositionUpdate(pos)
+		}
+	}
+
+	m.lastPositionSnapshots = current
+}
+
+func (m *Manager) fanOutOrderUpdate(order *models.Order) {
+	if !m.active {
+		return
+	}
+
+	m.mu.RLock()
+	strategies := make([]Strategy, 0, len(m.strategies))
+	for _, s := range m.strategies {
+		if s.IsActive() {
+			for _, sym := range s.GetSymbols() {
+				if sym == order.Symbol {
+					strategies = append(strategies, s)
+					break
+				}
+			}
+		}
+	}
+	m.mu.RUnlock()
+
+	for _, s := range strategies {
+		go func(st Strategy) {
+			if err := st.OnOrderUpdate(m.ctx, order); err != nil {
+				m.logger.Error("strategy order update failed",
+					zap.String("strategy", st.Name()),
+					zap.String("symbol", order.Symbol),
+					zap.Error(err))
+			}
+		}(s)
+	}
+}
+
+func (m *Manager) fanOutPositionUpdate(position *models.Position) {
+	if !m.active {
+		return
+	}
+
+	m.mu.RLock()
+	strategies := make([]Strategy, 0, len(m.strategies))
+	for _, s := range m.strategies {
+		if s.IsActive() {
+			for _, sym := range s.GetSymbols() {
+				if sym == position.Symbol {
+					strategies = append(strategies, s)
+					break
+				}
+			}
+		}
+	}
+	m.mu.RUnlock()
+
+	for _, s := range strategies {
+		go func(st Strategy) {
+			if err := st.OnPositionUpdate(m.ctx, position); err != nil {
+				m.logger.Error("strategy position update failed",
+					zap.String("strategy", st.Name()),
+					zap.String("symbol", position.Symbol),
+					zap.Error(err))
+			}
+		}(s)
+	}
+}
+
 // addSymbolsToStream adds symbols to the streaming service
 func (m *Manager) addSymbolsToStream(symbols []string) {
 	m.symbolMu.Lock()
@@ -593,7 +801,9 @@ func (m *Manager) updateSymbolStream() {
 					m.cache.SetSnapshot(trade.Symbol, snapshot)
 				}
 				// Process trade data
-				m.logger.Debug("received trade", zap.String("symbol", trade.Symbol), zap.String("price", trade.Price.String()))
+				if marketDebugEnabled() {
+					m.logger.Debug("received trade", zap.String("symbol", trade.Symbol), zap.String("price", trade.Price.String()))
+				}
 
 				// Emit tick to strategies
 				m.OnTick(trade.Symbol, snapshot)
@@ -621,7 +831,9 @@ func (m *Manager) updateSymbolStream() {
 					m.cache.SetSnapshot(quote.Symbol, snapshot)
 				}
 				// Process quote data
-				m.logger.Debug("received quote", zap.String("symbol", quote.Symbol), zap.String("bid", quote.BidPrice.String()), zap.String("ask", quote.AskPrice.String()))
+				if marketDebugEnabled() {
+					m.logger.Debug("received quote", zap.String("symbol", quote.Symbol), zap.String("bid", quote.BidPrice.String()), zap.String("ask", quote.AskPrice.String()))
+				}
 				m.OnTick(quote.Symbol, snapshot)
 
 				// Update bar aggregator from quote mid price (in case trade stream is limited)
@@ -632,7 +844,9 @@ func (m *Manager) updateSymbolStream() {
 		m.stream.RegisterHandler("bar", func(msg interface{}) {
 			if bar, ok := msg.(*models.Bar); ok {
 				// Process bar data
-				m.logger.Debug("received bar", zap.String("symbol", bar.Symbol), zap.String("close", bar.Close.String()))
+				if marketDebugEnabled() {
+					m.logger.Debug("received bar", zap.String("symbol", bar.Symbol), zap.String("close", bar.Close.String()))
+				}
 				m.OnBar(bar.Symbol, bar)
 			}
 		})
@@ -651,7 +865,9 @@ func (m *Manager) updateAggregatedBarFromTrade(trade *models.Trade) {
 		// Finalize previous bar if it exists and emit
 		if exists && bar != nil {
 			prev := *bar
-			m.logger.Debug("finalizing bar", zap.String("symbol", prev.Symbol), zap.Time("timestamp", prev.Timestamp), zap.String("close", prev.Close.String()))
+			if marketDebugEnabled() {
+				m.logger.Debug("finalizing bar", zap.String("symbol", prev.Symbol), zap.Time("timestamp", prev.Timestamp), zap.String("close", prev.Close.String()))
+			}
 			go m.OnBar(prev.Symbol, &prev)
 		}
 		// Start new bar
@@ -705,7 +921,9 @@ func (m *Manager) updateAggregatedBarFromQuote(quote *models.Quote) {
 		// Finalize previous bar if it exists and emit
 		if exists && bar != nil {
 			prev := *bar
-			m.logger.Debug("finalizing bar (quote)", zap.String("symbol", prev.Symbol), zap.Time("timestamp", prev.Timestamp), zap.String("close", prev.Close.String()))
+			if marketDebugEnabled() {
+				m.logger.Debug("finalizing bar (quote)", zap.String("symbol", prev.Symbol), zap.Time("timestamp", prev.Timestamp), zap.String("close", prev.Close.String()))
+			}
 			go m.OnBar(prev.Symbol, &prev)
 		}
 		// Start new bar (volume/tradecount unknown from quotes)

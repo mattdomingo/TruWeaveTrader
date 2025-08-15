@@ -55,14 +55,23 @@ func init() {
 
 // initConfig reads in config file and ENV variables if set.
 func initConfig() {
-	// Setup logger first
-	config := zap.NewDevelopmentConfig()
-	config.EncoderConfig.TimeKey = "time"
-	config.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	// Configure logger: default INFO, DEBUG if DEBUG env is truthy
+	verbose := false
+	if v := os.Getenv("DEBUG"); v == "true" || v == "1" || v == "yes" {
+		verbose = true
+	}
 
-	// Create logger
+	zcfg := zap.NewProductionConfig()
+	zcfg.EncoderConfig.TimeKey = "time"
+	zcfg.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	if verbose {
+		zcfg.Level = zap.NewAtomicLevelAt(zap.DebugLevel)
+	} else {
+		zcfg.Level = zap.NewAtomicLevelAt(zap.InfoLevel)
+	}
+
 	var err error
-	logger, err = config.Build()
+	logger, err = zcfg.Build()
 	if err != nil {
 		panic(fmt.Sprintf("Failed to initialize logger: %v", err))
 	}

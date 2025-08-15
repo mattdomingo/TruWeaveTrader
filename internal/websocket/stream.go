@@ -23,6 +23,7 @@ type StreamClient struct {
 	conn                  *websocket.Conn
 	mu                    sync.RWMutex
 	subscriptions         map[string]bool
+	tradeQuoteSymbols     []string // Track symbols subscribed to trades/quotes (limited to 30)
 	handlers              map[string]Handler
 	reconnectDelay        time.Duration
 	ctx                   context.Context
@@ -31,6 +32,7 @@ type StreamClient struct {
 	isAuthenticated       bool
 	connectionAttempts    int
 	maxConnectionAttempts int
+	maxTradeQuoteSymbols  int // Alpaca limit for trades/quotes combined
 }
 
 // Handler is a callback for stream messages
@@ -100,11 +102,13 @@ func NewStreamClient(cfg *config.Config, cache *cache.Cache, logger *zap.Logger)
 		cache:                 cache,
 		logger:                logger,
 		subscriptions:         make(map[string]bool),
+		tradeQuoteSymbols:     make([]string, 0),
 		handlers:              make(map[string]Handler),
 		reconnectDelay:        cfg.WebsocketReconnectDelay,
 		ctx:                   ctx,
 		cancel:                cancel,
 		maxConnectionAttempts: 5,
+		maxTradeQuoteSymbols:  30, // Alpaca's free plan limit
 	}
 }
 
@@ -119,6 +123,8 @@ func (c *StreamClient) Connect() error {
 		c.conn = nil
 		c.isConnected = false
 		c.isAuthenticated = false
+		// Reset trade/quote subscriptions tracking on reconnect
+		c.tradeQuoteSymbols = make([]string, 0)
 	}
 
 	wsURL := "wss://stream.data.alpaca.markets/v2/iex"
@@ -183,8 +189,32 @@ func (c *StreamClient) Subscribe(symbols []string) error {
 	return nil
 }
 
-// subscribeSymbols sends subscription message
+// subscribeSymbols sends subscription message with Alpaca's 30-symbol limit handling
 func (c *StreamClient) subscribeSymbols(symbols []string) error {
+	// Always subscribe to bars (unlimited)
+	barSymbols := symbols
+
+	// For trades/quotes, respect the 30-symbol limit
+	var tradeQuoteSymbols []string
+
+	// Add new symbols to trade/quote subscriptions up to the limit
+	for _, symbol := range symbols {
+		// Check if already subscribed
+		alreadySubscribed := false
+		for _, existing := range c.tradeQuoteSymbols {
+			if existing == symbol {
+				alreadySubscribed = true
+				break
+			}
+		}
+
+		if !alreadySubscribed && len(c.tradeQuoteSymbols) < c.maxTradeQuoteSymbols {
+			c.tradeQuoteSymbols = append(c.tradeQuoteSymbols, symbol)
+			tradeQuoteSymbols = append(tradeQuoteSymbols, symbol)
+		}
+	}
+
+	// Prepare subscription message
 	msg := struct {
 		Action string   `json:"action"`
 		Trades []string `json:"trades,omitempty"`
@@ -192,12 +222,17 @@ func (c *StreamClient) subscribeSymbols(symbols []string) error {
 		Bars   []string `json:"bars,omitempty"`
 	}{
 		Action: "subscribe",
-		Trades: symbols,
-		Quotes: symbols,
-		Bars:   symbols,
+		Trades: tradeQuoteSymbols,
+		Quotes: tradeQuoteSymbols,
+		Bars:   barSymbols,
 	}
 
-	c.logger.Info("Sending subscription", zap.Strings("symbols", symbols))
+	c.logger.Info("Sending subscription",
+		zap.Strings("bars", barSymbols),
+		zap.Strings("trades_quotes", tradeQuoteSymbols),
+		zap.Int("trade_quote_limit", c.maxTradeQuoteSymbols),
+		zap.Int("trade_quote_used", len(c.tradeQuoteSymbols)))
+
 	return c.conn.WriteJSON(msg)
 }
 
@@ -211,6 +246,19 @@ func (c *StreamClient) Unsubscribe(symbols []string) error {
 		delete(c.subscriptions, symbol)
 	}
 
+	// Remove from trade/quote tracking
+	var tradeQuoteSymbolsToRemove []string
+	for _, symbol := range symbols {
+		for i, existing := range c.tradeQuoteSymbols {
+			if existing == symbol {
+				// Remove from tracking
+				c.tradeQuoteSymbols = append(c.tradeQuoteSymbols[:i], c.tradeQuoteSymbols[i+1:]...)
+				tradeQuoteSymbolsToRemove = append(tradeQuoteSymbolsToRemove, symbol)
+				break
+			}
+		}
+	}
+
 	if c.isConnected && c.isAuthenticated {
 		msg := struct {
 			Action string   `json:"action"`
@@ -219,10 +267,15 @@ func (c *StreamClient) Unsubscribe(symbols []string) error {
 			Bars   []string `json:"bars,omitempty"`
 		}{
 			Action: "unsubscribe",
-			Trades: symbols,
-			Quotes: symbols,
-			Bars:   symbols,
+			Trades: tradeQuoteSymbolsToRemove,
+			Quotes: tradeQuoteSymbolsToRemove,
+			Bars:   symbols, // Unsubscribe from bars for all symbols
 		}
+
+		c.logger.Info("Sending unsubscription",
+			zap.Strings("bars", symbols),
+			zap.Strings("trades_quotes", tradeQuoteSymbolsToRemove))
+
 		return c.conn.WriteJSON(msg)
 	}
 
